@@ -1,0 +1,12 @@
+[package]
+name = "elf-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+env_logger = { workspace = true }
+elf-lib = { path = "../elf-lib" }

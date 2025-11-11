@@ -1,0 +1,19 @@
+[package]
+name = "elf-gui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+egui_plot = { workspace = true }
+elf-lib = { path = "../elf-lib" }
+
+[features]
+default = ["native"]
+native = []
+web = []
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

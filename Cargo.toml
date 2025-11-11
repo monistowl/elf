@@ -1,0 +1,28 @@
+[workspace]
+members = [
+    "crates/elf-lib",
+    "crates/elf-cli",
+    "crates/elf-gui",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["ELF Contributors"]
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
+realfft = "3"
+num-traits = "0.2"
+polars = { version = "0.43", features = ["lazy", "csv", "dtype-date", "fmt"], default-features = false }
+arrow = { package = "arrow2", version = "0.18" }
+egui = "0.30"
+eframe = { version = "0.30", default-features = false, features = ["glow"] }
+egui_plot = "0.30"
