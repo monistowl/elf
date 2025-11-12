@@ -8,7 +8,10 @@ use elf_lib::signal::{Events, TimeSeries};
 use rfd::FileDialog;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::thread::JoinHandle;
+use std::process::Command;
+use std::sync::mpsc;
+use std::sync::mpsc::TryRecvError;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 fn main() -> eframe::Result<()> {
@@ -98,6 +101,65 @@ impl EyeLayout {
     }
 }
 
+#[derive(Copy, Clone, PartialEq)]
+enum BatchCommand {
+    EcgFindRpeaks,
+    BeatHrvPipeline,
+}
+
+impl BatchCommand {
+    fn label(&self) -> &'static str {
+        match self {
+            BatchCommand::EcgFindRpeaks => "ecg-find-rpeaks",
+            BatchCommand::BeatHrvPipeline => "beat-hrv-pipeline",
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            BatchCommand::EcgFindRpeaks => "Detect R-peaks",
+            BatchCommand::BeatHrvPipeline => "Full HRV pipeline",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct LandingBatch {
+    inputs: Vec<PathBuf>,
+    dest: Option<PathBuf>,
+    command: BatchCommand,
+    fs: String,
+    min_rr: String,
+    threshold_scale: f64,
+    use_annotations: bool,
+    annotations: Option<PathBuf>,
+    use_bids: bool,
+    bids_events: Option<PathBuf>,
+}
+
+impl Default for LandingBatch {
+    fn default() -> Self {
+        Self {
+            inputs: Vec::new(),
+            dest: None,
+            command: BatchCommand::BeatHrvPipeline,
+            fs: "250".to_string(),
+            min_rr: "0.12".to_string(),
+            threshold_scale: 0.6,
+            use_annotations: false,
+            annotations: None,
+            use_bids: false,
+            bids_events: None,
+        }
+    }
+}
+
+struct BatchFeedback {
+    file: PathBuf,
+    message: String,
+    success: bool,
+}
+
 const SYNTHETIC_RR: [f64; 12] = [
     0.82, 0.78, 0.8, 0.79, 0.83, 0.77, 0.84, 0.88, 0.86, 0.81, 0.79, 0.82,
 ];
@@ -175,6 +237,10 @@ struct ElfApp {
     fs: f64,
     status: String,
     active_tab: GuiTab,
+    landing_batch: LandingBatch,
+    batch_receiver: Option<mpsc::Receiver<BatchFeedback>>,
+    batch_running: bool,
+    batch_summary: Vec<BatchFeedback>,
     // EEG tab state
     eeg_channel: usize,
     eeg_event_source: Option<String>,
@@ -202,6 +268,10 @@ impl Default for ElfApp {
             fs: 250.0,
             status: "No recording loaded".into(),
             active_tab: GuiTab::Landing,
+            landing_batch: LandingBatch::default(),
+            batch_receiver: None,
+            batch_running: false,
+            batch_summary: Vec::new(),
             eeg_channel: 0,
             eeg_event_source: None,
             eeg_path: None,
@@ -960,6 +1030,261 @@ impl ElfApp {
             }
         });
     }
+
+    fn show_landing_tab(&mut self, ctx: &egui::Context) {
+        self.poll_batch_results();
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Batch CLI runner");
+            ui.label("Drop or select inputs, configure CLI flags, and save outputs.");
+            ui.separator();
+
+            egui::ComboBox::from_label("Command")
+                .selected_text(self.landing_batch.command.title())
+                .show_ui(ui, |ui| {
+                    for &option in
+                        [BatchCommand::BeatHrvPipeline, BatchCommand::EcgFindRpeaks].iter()
+                    {
+                        if ui
+                            .selectable_label(self.landing_batch.command == option, option.title())
+                            .clicked()
+                        {
+                            self.landing_batch.command = option;
+                        }
+                    }
+                });
+
+            ui.horizontal(|ui| {
+                ui.label("Sampling rate (Hz)");
+                ui.text_edit_singleline(&mut self.landing_batch.fs);
+                ui.label("Min RR (s)");
+                ui.text_edit_singleline(&mut self.landing_batch.min_rr);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Threshold scale");
+                ui.add(egui::Slider::new(
+                    &mut self.landing_batch.threshold_scale,
+                    0.1..=2.0,
+                ));
+            });
+
+            ui.horizontal(|ui| {
+                if ui.button("Add input files").clicked() {
+                    if let Some(files) = FileDialog::new()
+                        .add_filter("ECG + CSV", &["txt", "csv", "dat", "hea", "edf", "json"])
+                        .pick_files()
+                    {
+                        self.landing_batch.inputs.extend(files);
+                    }
+                }
+                if ui.button("Clear inputs").clicked() {
+                    self.landing_batch.inputs.clear();
+                }
+            });
+            if !self.landing_batch.inputs.is_empty() {
+                egui::ScrollArea::vertical()
+                    .max_height(100.0)
+                    .show(ui, |ui| {
+                        for path in &self.landing_batch.inputs {
+                            ui.label(path.display().to_string());
+                        }
+                    });
+            }
+
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Select destination folder").clicked() {
+                    if let Some(dest) = FileDialog::new().pick_folder() {
+                        self.landing_batch.dest = Some(dest);
+                    }
+                }
+                if let Some(dest) = &self.landing_batch.dest {
+                    ui.label(dest.display().to_string());
+                } else {
+                    ui.label("No destination set");
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut self.landing_batch.use_annotations,
+                    "Include annotations",
+                );
+                if ui.button("Select annotations").clicked() {
+                    if let Some(path) = FileDialog::new()
+                        .add_filter("ATR", &["atr", "json", "txt"])
+                        .pick_file()
+                    {
+                        self.landing_batch.annotations = Some(path);
+                    }
+                }
+                if let Some(path) = &self.landing_batch.annotations {
+                    ui.label(path.display().to_string());
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.landing_batch.use_bids, "Use BIDS events");
+                if ui.button("Select BIDS TSV").clicked() {
+                    if let Some(path) = FileDialog::new()
+                        .add_filter("TSV", &["tsv", "txt"])
+                        .pick_file()
+                    {
+                        self.landing_batch.bids_events = Some(path);
+                    }
+                }
+                if let Some(path) = &self.landing_batch.bids_events {
+                    ui.label(path.display().to_string());
+                }
+            });
+
+            ui.separator();
+            let can_run = !self.landing_batch.inputs.is_empty()
+                && self.landing_batch.dest.is_some()
+                && !self.batch_running;
+            if ui
+                .add_enabled(can_run, egui::Button::new("Run batch CLI"))
+                .clicked()
+            {
+                self.start_batch_run();
+            }
+            if self.batch_running {
+                ui.label("Batch running...");
+            }
+            if ui.button("Clear status").clicked() {
+                self.batch_summary.clear();
+            }
+            if !self.batch_summary.is_empty() {
+                ui.separator();
+                ui.label("Batch results:");
+                for entry in &self.batch_summary {
+                    let status = if entry.success { "Success" } else { "Error" };
+                    ui.label(format!(
+                        "{} – {}: {}",
+                        status,
+                        entry.file.display(),
+                        entry.message
+                    ));
+                }
+            }
+        });
+    }
+
+    fn start_batch_run(&mut self) {
+        if self.batch_running || self.landing_batch.inputs.is_empty() {
+            return;
+        }
+        let dest = match &self.landing_batch.dest {
+            Some(dest) => dest.clone(),
+            None => return,
+        };
+        let config = self.landing_batch.clone();
+        let (tx, rx) = mpsc::channel();
+        self.batch_receiver = Some(rx);
+        self.batch_summary.clear();
+        self.batch_running = true;
+        thread::spawn(move || run_batch_task(config, dest, tx));
+    }
+
+    fn poll_batch_results(&mut self) {
+        if let Some(rx) = &self.batch_receiver {
+            loop {
+                match rx.try_recv() {
+                    Ok(feedback) => self.batch_summary.push(feedback),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        self.batch_receiver = None;
+                        self.batch_running = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn run_batch_task(config: LandingBatch, dest: PathBuf, sender: mpsc::Sender<BatchFeedback>) {
+    if let Err(err) = std::fs::create_dir_all(&dest) {
+        let _ = sender.send(BatchFeedback {
+            file: dest.clone(),
+            success: false,
+            message: format!("unable to create destination: {}", err),
+        });
+        return;
+    }
+    for input in config.inputs {
+        let feedback = run_single_file(&config, input, &dest);
+        let _ = sender.send(feedback);
+    }
+}
+
+fn run_single_file(config: &LandingBatch, input: PathBuf, dest: &Path) -> BatchFeedback {
+    let mut cmd = Command::new("elf");
+    cmd.arg(config.command.label());
+    cmd.arg("--fs").arg(&config.fs);
+    cmd.arg("--min-rr-s").arg(&config.min_rr);
+    if config.command == BatchCommand::BeatHrvPipeline {
+        cmd.arg("--threshold-scale")
+            .arg(config.threshold_scale.to_string());
+    }
+    if config.use_annotations {
+        if let Some(path) = &config.annotations {
+            cmd.arg("--annotations").arg(path);
+        }
+    }
+    if config.use_bids && config.command == BatchCommand::BeatHrvPipeline {
+        if let Some(path) = &config.bids_events {
+            cmd.arg("--bids-events").arg(path);
+        }
+    }
+    cmd.arg("--input").arg(&input);
+
+    match cmd.output() {
+        Ok(output) => {
+            if output.status.success() {
+                let out_path = batch_output_path(&input, dest);
+                match std::fs::write(&out_path, &output.stdout) {
+                    Ok(()) => BatchFeedback {
+                        file: input,
+                        success: true,
+                        message: format!("written {} bytes", output.stdout.len()),
+                    },
+                    Err(err) => BatchFeedback {
+                        file: input,
+                        success: false,
+                        message: format!("failed to write output: {}", err),
+                    },
+                }
+            } else {
+                BatchFeedback {
+                    file: input,
+                    success: false,
+                    message: format!(
+                        "command failed (code {}) {}",
+                        output.status.code().unwrap_or(-1),
+                        String::from_utf8_lossy(&output.stderr)
+                    ),
+                }
+            }
+        }
+        Err(err) => BatchFeedback {
+            file: input,
+            success: false,
+            message: format!("failed to spawn elf: {}", err),
+        },
+    }
+}
+
+fn batch_output_path(input: &Path, dest: &Path) -> PathBuf {
+    let file_name = input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("output");
+    let (base, extension) = match file_name.rfind('.') {
+        Some(idx) => (&file_name[..idx], &file_name[idx..]),
+        None => (file_name, ""),
+    };
+    let output_name = format!("{}_elfout{}", base, extension);
+    dest.join(output_name)
 }
 
 impl Drop for ElfApp {
@@ -990,14 +1315,7 @@ impl eframe::App for ElfApp {
         self.store.prepare_active_tab(self.active_tab);
 
         match self.active_tab {
-            GuiTab::Landing => {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.centered_and_justified(|ui| {
-                        ui.heading("Landing page");
-                        ui.label("More dashboards and insights coming soon.");
-                    });
-                });
-            }
+            GuiTab::Landing => self.show_landing_tab(ctx),
             GuiTab::Hrv => self.show_hrv_tab(ctx),
             GuiTab::Eeg => self.show_eeg_tab(ctx),
             GuiTab::Eye => self.show_eye_tab(ctx),
