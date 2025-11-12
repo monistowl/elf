@@ -84,6 +84,26 @@
         "lf_hf": 0.0,
         "total_power": 0.0
       }
+    },
+    {
+      "name": "openbci_ch1",
+      "openbci_input": "test_data/openbci_sample.csv",
+      "openbci_channel": "Ch1",
+      "hrv_time": {
+        "tolerance": 0.0001,
+        "avnn": 0.0,
+        "sdnn": 0.0,
+        "rmssd": 0.0,
+        "pnn50": 0.0
+      },
+      "hrv_psd": {
+        "tolerance": 0.1,
+        "lf": 0.0,
+        "hf": 0.0,
+        "vlf": 0.0,
+        "lf_hf": 0.0,
+        "total_power": 0.0
+      }
     }
   ]
 }

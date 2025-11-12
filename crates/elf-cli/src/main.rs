@@ -425,6 +425,10 @@ struct DatasetCase {
     #[serde(default)]
     bitalino_signal: Option<String>,
     #[serde(default)]
+    openbci_input: Option<String>,
+    #[serde(default)]
+    openbci_channel: Option<String>,
+    #[serde(default)]
     hrv_time: Option<HrvTimeSpec>,
     #[serde(default)]
     hrv_psd: Option<HrvPsdSpec>,
@@ -517,6 +521,14 @@ fn rr_series_from_case(
         let signal = case.bitalino_signal.as_deref().unwrap_or("analog0");
         let path = resolve_path(repo_root, bitalino_input);
         let ts = bitalino_io::read_bitalino_csv(&path, signal)?;
+        let result = run_beat_hrv_pipeline(&ts, &EcgPipelineConfig::default());
+        return Ok(result.rr);
+    }
+
+    if let Some(openbci_input) = &case.openbci_input {
+        let channel = case.openbci_channel.as_deref().unwrap_or("Ch1");
+        let path = resolve_path(repo_root, openbci_input);
+        let ts = openbci_io::read_openbci_csv(&path, channel)?;
         let result = run_beat_hrv_pipeline(&ts, &EcgPipelineConfig::default());
         return Ok(result.rr);
     }
