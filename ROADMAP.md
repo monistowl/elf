@@ -73,7 +73,7 @@ Processing the synthetic ECG recording now funnels the entire waveform through t
 1. **M3 streaming & state router** — finish LSL ingest + Parquet recording, add a reducer that feeds snapshots to whichever tab is visible, and keep worker threads computing PSD/nonlinear HRV off the UI thread.
 2. **Presenter bundles** — add the `run-simulate` command that normalizes design/TOML + trial/CSV specs into events/manifest bundles, track jitter/randomization metadata, and let `elf-gui` load the same bundle to replay stimuli, show manifest stats, and feed the shared `Store` with consistent `Events`/RRs.
 3. **Dataset coverage & automation** — expand PhysioNet/BIDS fixtures, add automated validation (golden RR + PSD comparisons) for each format, and keep new data in `test_data/` to lock regressions.
-4. **CLI + installer** — publish the shared `elf` binary (via `[[bin]] name = "elf"` in `crates/elf-cli/Cargo.toml`), keep release tarballs with `elf`, `elf-gui`, and `elf-run`, and maintain `scripts/install.sh`/`scripts/uninstall.sh` that push symlinks into `~/.local/bin` so future work can rely on the CLI being on PATH.
+4. **CLI + installer** — publish the shared `elf` binary (via `[[bin]] name = "elf"` in `crates/elf-cli/Cargo.toml`), keep release tarballs with `elf`, `elf-gui`, and `elf-run`, and maintain `scripts/package.sh`/`scripts/install.sh`/`scripts/uninstall.sh` so CI can emit archives + SHA256s and users can symlink the binaries into `~/.local/bin`.
 5. **UI polish** — stabilize tab interactions, add zoom/selection/decimation controls that reuse the shared `Figure`, cache derived curves across tabs, and surface more HRV/EEG/eye metrics in the dashboard.
 
 # High-quality open repos to mine/port (starter list)

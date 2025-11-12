@@ -15,7 +15,7 @@ cargo build --workspace
 
 ### CLI quick tour
 
-Install the suite via `scripts/install.sh` (it unpacks a release tarball into `~/.local/opt/elf/<version>` and symlinks `elf`, `elf-gui`, and `elf-run` into `~/.local/bin`). Once `elf` is on your PATH, run:
+Install the suite via `scripts/install.sh` (it unpacks a release tarball into `~/.local/opt/elf/<version>` and symlinks `elf`, `elf-gui`, and `elf-run` into `~/.local/bin`). Use `scripts/package.sh` (and `cargo build --release`) to produce the required tarball + SHA256; `install.sh` expects each release artifact to live at `https://example.com/elf/releases/<version>/elf-<version>-<arch>-<os>.tar.xz` with a matching `.sha256`. Once `elf` is on your PATH, run:
 
 ```bash
 cat test_data/synthetic_recording_a.txt | elf -- ecg-find-rpeaks --fs 250 | jq
