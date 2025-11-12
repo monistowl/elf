@@ -130,7 +130,7 @@ enum Commands {
         integration_window_s: f64,
         #[arg(long, default_value_t = 0.12)]
         min_rr_s: f64,
-        #[arg(long, default_value_t = 0.3)]
+        #[arg(long, default_value_t = 0.6)]
         threshold_scale: f64,
         #[arg(long, default_value_t = 0.150)]
         search_back_s: f64,

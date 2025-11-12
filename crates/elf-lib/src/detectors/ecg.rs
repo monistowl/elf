@@ -28,7 +28,7 @@ impl Default for EcgPipelineConfig {
             highcut_hz: 15.0,
             integration_window_s: 0.150,
             min_rr_s: 0.120,
-            threshold_scale: 0.3,
+            threshold_scale: 0.6,
             search_back_s: 0.150,
         }
     }
@@ -346,6 +346,34 @@ mod tests {
         assert!(
             false_positive <= max_false_positive,
             "too many extra detections: {} (limit {})",
+            false_positive,
+            max_false_positive
+        );
+    }
+
+    #[test]
+    fn detector_matches_mitdb_205_annotations() {
+        let root = workspace_root();
+        let header = root.join("test_data/mitdb/205.hea");
+        let annotations = root.join("test_data/mitdb/205.atr");
+        let ts = wfdb_io::load_wfdb_lead(&header, 0).expect("load MIT-BIH lead");
+        let detected = detect_r_peaks_with_config(&ts, &EcgPipelineConfig::default());
+        let ann = wfdb_io::load_wfdb_events(&annotations).expect("load MIT-BIH annotations");
+        let tolerance = ((0.04 * ts.fs).round() as usize).max(2);
+        let matches = count_matches(&ann.indices, &detected.indices, tolerance);
+        let coverage = matches as f64 / ann.indices.len() as f64;
+        assert!(
+            coverage >= 0.95,
+            "detector coverage too low for 205: {}/{} ({:.1}%)",
+            matches,
+            ann.indices.len(),
+            coverage * 100.0
+        );
+        let false_positive = detected.indices.len().saturating_sub(matches);
+        let max_false_positive = ((ann.indices.len() as f64) * 0.2).ceil() as usize;
+        assert!(
+            false_positive <= max_false_positive,
+            "too many extra detections for 205: {} (limit {})",
             false_positive,
             max_false_positive
         );
