@@ -29,3 +29,4 @@ target
 .beads/
 # Generated run bundles
 test_data/run_bundle/
+.venv/

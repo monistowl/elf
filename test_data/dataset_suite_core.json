@@ -30,19 +30,21 @@
       "interp_fs": 4.0,
       "hrv_time": {
         "tolerance": 0.001,
-        "avnn": 0.7597467732884376,
-        "sdnn": 0.1307286747486552,
-        "rmssd": 0.14726362652911074,
-        "pnn50": 0.28589473684210526
+        "avnn": 0.7943173485848347,
+        "sdnn": 0.05060362982564227,
+        "rmssd": 0.06468973137873497,
+        "pnn50": 0.1056338028169014
       },
       "hrv_psd": {
-        "tolerance": 50.0,
-        "lf": 2337.0174809242963,
-        "hf": 4148.322516955657,
-        "vlf": 95616.73371043925,
-        "lf_hf": 0.5633644615075326,
-        "total_power": 303395.83751730894
-      }
+        "tolerance": 200.0,
+        "lf": 61.74243479437095,
+        "hf": 283.8514688482873,
+        "vlf": 85528.73193146271,
+        "lf_hf": 0.21751670000119322,
+        "total_power": 257212.9044507282
+      },
+      "fs": 360.0,
+      "annotations": "test_data/mitdb/100.atr"
     },
     {
       "name": "bids_eye_events",
@@ -106,6 +108,29 @@
       }
     },
     {
+      "name": "mitdb_118_lead0",
+      "wfdb_header": "test_data/mitdb/118.hea",
+      "wfdb_lead": 0,
+      "interp_fs": 4.0,
+      "hrv_time": {
+        "tolerance": 0.001,
+        "avnn": 0.7847113526570031,
+        "sdnn": 0.1027125107204339,
+        "rmssd": 0.1312504451036905,
+        "pnn50": 0.17050891692040018
+      },
+      "hrv_psd": {
+        "tolerance": 500.0,
+        "lf": 365.33836422598347,
+        "hf": 995.2950745992126,
+        "vlf": 88322.70476308238,
+        "lf_hf": 0.367065379453524,
+        "total_power": 269805.7641766883
+      },
+      "fs": 360.0,
+      "annotations": "test_data/mitdb/118.atr"
+    },
+    {
       "name": "run_bundle_stim",
       "annotations": "test_data/run_bundle/events.idx",
       "fs": 250.0,
@@ -123,6 +148,29 @@
         "vlf": 0.0,
         "lf_hf": 0.0,
         "total_power": 47652.83845394946
+      }
+    },
+    {
+      "name": "mitdb_205_lead0",
+      "wfdb_header": "test_data/mitdb/205.hea",
+      "wfdb_lead": 0,
+      "annotations": "test_data/mitdb/205.atr",
+      "fs": 360.0,
+      "interp_fs": 4.0,
+      "hrv_time": {
+        "tolerance": 0.001,
+        "avnn": 0.6758288614335041,
+        "sdnn": 0.0780075299738343,
+        "rmssd": 0.08077210908562721,
+        "pnn50": 0.04681647940074907
+      },
+      "hrv_psd": {
+        "tolerance": 500.0,
+        "lf": 1357.3592169805954,
+        "hf": 1364.8734018199787,
+        "vlf": 119204.52807158523,
+        "lf_hf": 0.9944945920776509,
+        "total_power": 365166.5039246296
       }
     }
   ]
