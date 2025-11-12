@@ -1,5 +1,6 @@
 use crossbeam_channel::{bounded, Sender};
 use eframe::{egui, egui::ViewportBuilder};
+use egui::ScrollArea;
 use egui_plot::{Line, Plot, VLine};
 use elf_lib::detectors::ecg::{run_beat_hrv_pipeline, EcgPipelineConfig};
 use elf_lib::io::{eeg as eeg_io, eye as eye_io, text as text_io, wfdb as wfdb_io};
@@ -790,79 +791,81 @@ impl ElfApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.store.ecg().is_none() {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Load an ECG recording to see the waveform.");
-                });
-                return;
-            }
+            ScrollArea::vertical().show(ui, |ui| {
+                if self.store.ecg().is_none() {
+                    ui.centered_and_justified(|ui| {
+                        ui.label("Load an ECG recording to see the waveform.");
+                    });
+                    return;
+                }
 
-            if let Some(fig) = self.store.ecg_figure() {
-                Plot::new("ecg_plot").height(360.0).show(ui, |plot_ui| {
-                    plot_plot_figure(plot_ui, fig);
-                    for time in self.store.event_seconds() {
-                        plot_ui.vline(
-                            VLine::new(time).stroke(egui::Stroke::new(1.0, egui::Color32::RED)),
-                        );
-                    }
-                });
-            } else {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Preparing ECG waveform...");
-                });
-            }
-
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.group(|ui| {
-                    ui.label("HRV (time domain)");
-                    if let Some(hrv) = self.store.hrv_time() {
-                        ui.label(format!("AVNN: {:.3}s", hrv.avnn));
-                        ui.label(format!("SDNN: {:.3}s", hrv.sdnn));
-                        ui.label(format!("RMSSD: {:.3}s", hrv.rmssd));
-                        ui.label(format!("pNN50: {:.2}%", hrv.pnn50 * 100.0));
-                    } else {
-                        ui.label("No HRV metrics available");
-                    }
-                });
-                ui.vertical(|ui| {
-                    ui.label("RR intervals (first five)");
-                    if let Some(rr) = self.store.rr_series() {
-                        for value in rr.rr.iter().take(5) {
-                            ui.label(format!("{:.3}s", value));
+                if let Some(fig) = self.store.ecg_figure() {
+                    Plot::new("ecg_plot").height(360.0).show(ui, |plot_ui| {
+                        plot_plot_figure(plot_ui, fig);
+                        for time in self.store.event_seconds() {
+                            plot_ui.vline(
+                                VLine::new(time).stroke(egui::Stroke::new(1.0, egui::Color32::RED)),
+                            );
                         }
-                        if rr.rr.len() > 5 {
-                            ui.label(format!("... +{} more", rr.rr.len() - 5));
-                        }
-                    } else {
-                        ui.label("No RR intervals yet");
-                    }
-                });
-            });
-
-            if let Some(psd) = self.store.hrv_psd() {
-                ui.separator();
-                ui.label("Frequency domain");
-                ui.label(format!("LF: {:.3}", psd.lf));
-                ui.label(format!("HF: {:.3}", psd.hf));
-                ui.label(format!("VLF: {:.3}", psd.vlf));
-                ui.label(format!("LF/HF: {:.3}", psd.lf_hf));
-                if let Some(psd_fig) = self.store.psd_figure() {
-                    Plot::new("psd_plot").height(180.0).show(ui, |plot_ui| {
-                        plot_plot_figure(plot_ui, psd_fig);
+                    });
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        ui.label("Preparing ECG waveform...");
                     });
                 }
-            }
 
-            if let Some(nl) = self.store.hrv_nonlinear() {
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.label(format!("SD1: {:.3}s", nl.sd1));
-                    ui.label(format!("SD2: {:.3}s", nl.sd2));
-                    ui.label(format!("SampEn: {:.3}", nl.samp_entropy));
-                    ui.label(format!("DFA alpha1: {:.3}", nl.dfa_alpha1));
+                    ui.group(|ui| {
+                        ui.label("HRV (time domain)");
+                        if let Some(hrv) = self.store.hrv_time() {
+                            ui.label(format!("AVNN: {:.3}s", hrv.avnn));
+                            ui.label(format!("SDNN: {:.3}s", hrv.sdnn));
+                            ui.label(format!("RMSSD: {:.3}s", hrv.rmssd));
+                            ui.label(format!("pNN50: {:.2}%", hrv.pnn50 * 100.0));
+                        } else {
+                            ui.label("No HRV metrics available");
+                        }
+                    });
+                    ui.vertical(|ui| {
+                        ui.label("RR intervals (first five)");
+                        if let Some(rr) = self.store.rr_series() {
+                            for value in rr.rr.iter().take(5) {
+                                ui.label(format!("{:.3}s", value));
+                            }
+                            if rr.rr.len() > 5 {
+                                ui.label(format!("... +{} more", rr.rr.len() - 5));
+                            }
+                        } else {
+                            ui.label("No RR intervals yet");
+                        }
+                    });
                 });
-            }
+
+                if let Some(psd) = self.store.hrv_psd() {
+                    ui.separator();
+                    ui.label("Frequency domain");
+                    ui.label(format!("LF: {:.3}", psd.lf));
+                    ui.label(format!("HF: {:.3}", psd.hf));
+                    ui.label(format!("VLF: {:.3}", psd.vlf));
+                    ui.label(format!("LF/HF: {:.3}", psd.lf_hf));
+                    if let Some(psd_fig) = self.store.psd_figure() {
+                        Plot::new("psd_plot").height(180.0).show(ui, |plot_ui| {
+                            plot_plot_figure(plot_ui, psd_fig);
+                        });
+                    }
+                }
+
+                if let Some(nl) = self.store.hrv_nonlinear() {
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label(format!("SD1: {:.3}s", nl.sd1));
+                        ui.label(format!("SD2: {:.3}s", nl.sd2));
+                        ui.label(format!("SampEn: {:.3}", nl.samp_entropy));
+                        ui.label(format!("DFA alpha1: {:.3}", nl.dfa_alpha1));
+                    });
+                }
+            });
         });
     }
 
@@ -1211,7 +1214,8 @@ fn run_batch_task(config: LandingBatch, dest: PathBuf, sender: mpsc::Sender<Batc
         });
         return;
     }
-    for input in config.inputs {
+    let inputs = config.inputs.clone();
+    for input in inputs {
         let feedback = run_single_file(&config, input, &dest);
         let _ = sender.send(feedback);
     }
