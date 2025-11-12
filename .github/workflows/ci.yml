@@ -18,6 +18,8 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo build --workspace --all-features
       - run: cargo test --workspace --all-features
+      - name: Validate dataset fixtures
+        run: cargo run -p elf-cli -- dataset-validate --spec test_data/dataset_suite_core.json
 
   package_release:
     if: github.event_name == 'release'
@@ -26,6 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Validate dataset fixtures
+        run: cargo run -p elf-cli -- dataset-validate --spec test_data/dataset_suite_core.json
       - name: Run package script
         env:
           VERSION: ${{ github.event.release.tag_name }}

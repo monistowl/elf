@@ -25,11 +25,25 @@ SHASUM_URL="$URL.sha256"
 TMP=$(mktemp --suffix="-$FILE")
 curl -fsSL "$URL" -o "$TMP"
 if curl -fsSL "$SHASUM_URL" >/tmp/elf-sha256.txt; then
-  (cd "$OPT" && sha256sum -c /tmp/elf-sha256.txt) || (rm -f "$TMP" && exit 1)
+  EXPECTED=$(awk '{print $1}' /tmp/elf-sha256.txt)
+  if command -v sha256sum >/dev/null; then
+    COMPUTED=$(sha256sum "$TMP" | awk '{print $1}')
+  elif command -v shasum >/dev/null; then
+    COMPUTED=$(shasum -a 256 "$TMP" | awk '{print $1}')
+  else
+    echo "Warning: checksum verifier not found; skipping hash validation"
+    COMPUTED="$EXPECTED"
+  fi
+  if [ "$COMPUTED" != "$EXPECTED" ]; then
+    rm -f "$TMP"
+    echo "Checksum mismatch for $FILE"
+    exit 1
+  fi
 fi
 DEST="$OPT/$VERSION"
 rm -rf "$DEST" && mkdir -p "$DEST"
 tar -xJf "$TMP" -C "$DEST"
+rm -f "$TMP"
 ln -sf "$DEST" "$OPT/current"
 for exe in elf elf-gui elf-run; do
   ln -sf "$OPT/current/bin/$exe" "$BIN/$exe"

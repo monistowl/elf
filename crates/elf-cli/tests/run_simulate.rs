@@ -78,6 +78,7 @@ fn run_simulate_writes_metadata() {
     .success();
     let metadata_path = out.join("events.json");
     assert!(metadata_path.exists());
-    let metadata: Value = serde_json::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    let metadata: Value =
+        serde_json::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
     assert_eq!(metadata["columns"]["onset"]["units"], "seconds");
 }
