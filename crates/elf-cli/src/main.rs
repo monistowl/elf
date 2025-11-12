@@ -9,14 +9,16 @@ use elf_lib::{
         text as text_io, wfdb as wfdb_io,
     },
     metrics::{
-        hrv::{hrv_nonlinear, hrv_psd, hrv_time},
+        hrv::{hrv_nonlinear, hrv_psd, hrv_time, HRVPsd, HRVTime},
         sqi::evaluate_sqi,
     },
-    plot::{figure_from_rr, Figure, Series},
+    plot::{
+        figure_from_rr, Figure, Series,
+    },
     signal::{Events, RRSeries, TimeSeries},
 };
 use plotters::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     env,
     fs::{self, File},
@@ -212,6 +214,8 @@ enum Commands {
     DatasetValidate {
         #[arg(long)]
         spec: PathBuf,
+        #[arg(long)]
+        json: Option<PathBuf>,
     },
     /// Compute signal quality indices (kurtosis, SNR, RR coefficient of variation)
     Sqi {
@@ -289,7 +293,7 @@ fn main() -> Result<()> {
         Commands::OpenBci { input, channel, fs } => {
             cmd_openbci_hrv(&input, &channel, fs.unwrap_or(0.0))?
         }
-        Commands::DatasetValidate { spec } => cmd_dataset_validate(&spec)?,
+        Commands::DatasetValidate { spec, json } => cmd_dataset_validate(&spec, json.as_deref())?,
         Commands::Sqi { input, fs } => cmd_sqi(input.as_deref(), fs)?,
         Commands::RunSimulate {
             design,
@@ -360,15 +364,16 @@ fn cmd_openbci_hrv(path: &Path, channel: &str, fs_override: f64) -> Result<()> {
     Ok(())
 }
 
-fn cmd_dataset_validate(spec_path: &Path) -> Result<()> {
+fn cmd_dataset_validate(spec_path: &Path, json: Option<&Path>) -> Result<()> {
     let spec_file = File::open(spec_path)
         .with_context(|| format!("failed to open spec {}", spec_path.display()))?;
     let spec: DatasetSpec =
         serde_json::from_reader(spec_file).context("failed to parse dataset spec")?;
     let repo_root = workspace_root();
+    let mut results = Vec::new();
     match spec {
         DatasetSpec::Case(case) => {
-            validate_case(&case, &repo_root, &CaseDefaults::default())?;
+            results.push(validate_case(&case, &repo_root, &CaseDefaults::default())?);
         }
         DatasetSpec::Suite(suite) => {
             let defaults = CaseDefaults {
@@ -377,7 +382,7 @@ fn cmd_dataset_validate(spec_path: &Path) -> Result<()> {
                 tolerance: suite.tolerance,
             };
             for case in &suite.cases {
-                validate_case(case, &repo_root, &defaults)?;
+                results.push(validate_case(case, &repo_root, &defaults)?);
             }
             println!(
                 "suite {} validated ({} cases)",
@@ -385,6 +390,14 @@ fn cmd_dataset_validate(spec_path: &Path) -> Result<()> {
                 suite.cases.len()
             );
         }
+    }
+    if let Some(path) = json {
+        let file = File::create(path)
+            .with_context(|| format!("failed to write report {}", path.display()))?;
+        serde_json::to_writer_pretty(file, &results)?;
+        println!("dataset report written to {}", path.display());
+    } else {
+        println!("{}", serde_json::to_string(&results)?);
     }
     Ok(())
 }
@@ -413,6 +426,33 @@ struct CaseDefaults {
     fs: Option<f64>,
     interp_fs: Option<f64>,
     tolerance: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct TimeMetricsRecord {
+    avnn: f64,
+    sdnn: f64,
+    rmssd: f64,
+    pnn50: f64,
+    tolerance: f64,
+}
+
+#[derive(Serialize)]
+struct PsdMetricsRecord {
+    lf: f64,
+    hf: f64,
+    vlf: f64,
+    lf_hf: f64,
+    total_power: f64,
+    tolerance: f64,
+}
+
+#[derive(Serialize)]
+struct DatasetResult {
+    name: String,
+    status: String,
+    time: Option<TimeMetricsRecord>,
+    psd: Option<PsdMetricsRecord>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -480,18 +520,48 @@ struct HrvPsdSpec {
     total_power: Option<f64>,
 }
 
-fn validate_case(case: &DatasetCase, repo_root: &Path, defaults: &CaseDefaults) -> Result<()> {
+fn validate_case(
+    case: &DatasetCase,
+    repo_root: &Path,
+    defaults: &CaseDefaults,
+) -> Result<DatasetResult> {
     let tolerance = case.tolerance.or(defaults.tolerance).unwrap_or(0.5).abs();
     let interp_fs = case.interp_fs.or(defaults.interp_fs).unwrap_or(4.0);
     let rr = rr_series_from_case(case, repo_root, defaults)?;
-    if let Some(spec) = &case.hrv_time {
-        verify_time_metrics(&case.name, spec, &rr, tolerance)?;
-    }
-    if let Some(spec) = &case.hrv_psd {
-        verify_psd_metrics(&case.name, spec, &rr, interp_fs, tolerance)?;
-    }
+    let time_metrics = hrv_time(&rr);
+    let time_record = if let Some(spec) = &case.hrv_time {
+        verify_time_metrics(&case.name, spec, &time_metrics, tolerance)?;
+        Some(TimeMetricsRecord {
+            avnn: time_metrics.avnn,
+            sdnn: time_metrics.sdnn,
+            rmssd: time_metrics.rmssd,
+            pnn50: time_metrics.pnn50,
+            tolerance: spec.tolerance.unwrap_or(tolerance).abs(),
+        })
+    } else {
+        None
+    };
+    let psd_metrics = hrv_psd(&rr, interp_fs);
+    let psd_record = if let Some(spec) = &case.hrv_psd {
+        verify_psd_metrics(&case.name, spec, &psd_metrics, tolerance)?;
+        Some(PsdMetricsRecord {
+            lf: psd_metrics.lf,
+            hf: psd_metrics.hf,
+            vlf: psd_metrics.vlf,
+            lf_hf: psd_metrics.lf_hf,
+            total_power: psd_metrics.total_power,
+            tolerance: spec.tolerance.unwrap_or(tolerance).abs(),
+        })
+    } else {
+        None
+    };
     println!("dataset {} validated", case.name);
-    Ok(())
+    Ok(DatasetResult {
+        name: case.name.clone(),
+        status: "ok".into(),
+        time: time_record,
+        psd: psd_record,
+    })
 }
 
 fn rr_series_from_case(
@@ -582,11 +652,10 @@ fn rr_series_from_case(
 fn verify_time_metrics(
     dataset: &str,
     spec: &HrvTimeSpec,
-    rr: &RRSeries,
+    computed: &HRVTime,
     tolerance: f64,
 ) -> Result<()> {
     let tol = spec.tolerance.unwrap_or(tolerance).abs();
-    let computed = hrv_time(rr);
     if let Some(expected) = spec.avnn {
         assert_within(dataset, "AVNN", expected, computed.avnn, tol)?;
     }
@@ -605,12 +674,10 @@ fn verify_time_metrics(
 fn verify_psd_metrics(
     dataset: &str,
     spec: &HrvPsdSpec,
-    rr: &RRSeries,
-    interp_fs: f64,
+    computed: &HRVPsd,
     tolerance: f64,
 ) -> Result<()> {
     let tol = spec.tolerance.unwrap_or(tolerance).abs();
-    let computed = hrv_psd(rr, interp_fs);
     if let Some(expected) = spec.lf {
         assert_within(dataset, "LF", expected, computed.lf, tol)?;
     }
