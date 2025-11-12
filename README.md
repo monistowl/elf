@@ -1,44 +1,64 @@
-# ELF — Extensible Lab Framework (bootstrap)
+![image](./screenshot.png)
+# ELF — Extensible Lab Framework
 
-Local-first physiologic signal processing + biofeedback toolkit in Rust.
+`elf` is a Rust-native, local-first toolkit for acquiring, processing, and visualizing physiological signals. It bundles a portable DSP core (`elf-lib`), a CLI entrypoint (`elf`), an egui dashboard (`elf-gui`), and supporting tools for EEG/eye tracking and streaming adapters. The focus is on transparent HRV analytics, extensible importers (WFDB, EDF, BITalino, OpenBCI, CSV, BIDS), and consistent plotting/validation across CLI + GUI targets.
 
-## Quickstart
+---
+
+## Getting started
+
+### Build
 
 ```bash
-# build all
 cargo build --workspace
-
-# run CLI
-cat ecg.txt | cargo run -p elf-cli -- ecg-find-rpeaks --fs 250 | jq
-cat rr.txt  | cargo run -p elf-cli -- hrv-time | jq
-# run the end-to-end beat→RR→HRV pipeline on a sample recording
-cargo run -p elf-cli -- beat-hrv-pipeline --fs 250 --input test_data/synthetic_recording_a.txt | jq
-cargo run -p elf-cli -- hrv-psd --input test_data/tiny_rr.txt --interp-fs 4 | jq
-cargo run -p elf-cli -- hrv-nonlinear --input test_data/tiny_rr.txt | jq
-
-# run GUI
-cargo run -p elf-gui
 ```
 
-The CLI now understands WFDB records. Point `--wfdb-header` at a `.hea` file, `--wfdb-lead` at the desired channel, and `--annotations` at the `.atr` or newline list to reuse the same detector/HRV pipeline when working with PhysioNet data.
-Support for EEG-like formats is also landing: use `--eeg-edf`/`--eeg-channel` to read EDF files, and pass `--bids-events` alongside your pipeline to convert BIDS `events.tsv` onsets into sample indices while reusing the shared HRV tooling.
-Use `elf-cli pupil-normalize` with any of the supported column presets (`pupil-labs` or `tobii`) to filter pupil exports by confidence and emit normalized JSON so downstream tools (e.g., blink/interpolation pipelines) can read them.
-The new `elf-cli run-simulate` command reads the TOML/CSV pair described in `STIMULUS_PRESENTER.md`, schedules each trial (with optional jitter/rand policy) into `events.tsv`/`events.json`, and writes a `run.json` manifest so GUI dashboards can load the same bundle.
+### CLI quick tour
 
-The GUI now includes controls for pointing at a raw ECG recording (newline-delimited samples) and an optional
-annotation file, or for invoking the built-in detector when only the raw waveform is available. Uploaded beats
-are embedded into the plot and HRV summary tiles are updated from the same `elf-lib` pipeline that powers the CLI.
-It can also load a run bundle directory (the `events.tsv`/`run.json` produced by `run-simulate`) so you can inspect dataset-level metadata, run times, and event jitter before rerunning detection.
+Install the suite with `scripts/install.sh` (it unpacks release tarballs into `~/.local/opt/elf/<version>` and symlinks `elf`, `elf-gui`, and `elf-run` into `~/.local/bin`). Once `elf` is on your PATH you can run the headless tools without `cargo run`:
 
-## Next steps
-- Replace naive R-peak picker with proper pipeline (bandpass, diff, square, MWI, adaptive threshold).
-- Add CSV/Parquet readers (enable `elf-lib` feature `polars`).
-- Wire live streaming (LSL/OpenBCI adapters) and plots in `elf-gui`.
+```bash
+cat test_data/synthetic_recording_a.txt | elf -- ecg-find-rpeaks --fs 250 | jq
+elf -- hrv-time --input test_data/tiny_rr.txt --fs 250 | jq
+elf -- hrv-psd --input test_data/tiny_rr.txt --interp-fs 4 | jq
+elf -- hrv-nonlinear --input test_data/tiny_rr.txt | jq
+elf -- run-simulate --design test_data/run_design.toml --trials test_data/run_trials.csv --out /tmp/run
+```
 
-### Streaming router
-The GUI now routes incoming ECG/annotation chunks through a `StreamingStateRouter` that uses a `crossbeam-channel` worker to compute PSD/nonlinear HRV off the UI thread before publishing snapshots to whichever tab is active.
-You can try the new "Stream synthetic beats" button on the ECG/HRV tab to inject a small batch of reference RR events and see the worker compute metrics without locking the UI; there is also a "Process synthetic ECG" button that feeds the shared synthetic trace into the worker so detection + HRV happen off the UI thread.
+The `run-simulate` helper reads the TOML/CSV pair described in `STIMULUS_PRESENTER.md`, schedules trials (with optional jitter and randomization policy), emits `events.tsv`/`events.json`, and writes a `run.json` manifest so the GUI can load the exact bundle later.
 
-### New CLI helpers
-- `elf hrv-psd --input test_data/tiny_rr.txt --interp-fs 4` computes Welch PSD-derived LF/HF/VLF metrics plus a dense PSD trace (JSON).
-- `elf hrv-nonlinear --input test_data/tiny_rr.txt` reports Poincaré SD1/SD2, sample entropy, and DFA alpha1.
+### GUI quick tour
+
+```bash
+elf-gui
+```
+
+Load raw ECGs or WFDB/EDF spectra, import annotations, stream synthetic beats, or point the new `Load run bundle` button at a directory containing `events.tsv` + `run.json`. The UI reuses the shared `Figure` model so CLI plots, GUI graphs, and streaming downsampling stay consistent.
+
+---
+
+## Architecture overview
+
+- `elf-lib`: signal I/O for CSV/WFDB/EDF/eye exports, detectors, HRV/SQI metrics, and the shared `Figure/Series` plot model.
+- `elf-cli`: the `elf` binary exposing commands (`ecg-find-rpeaks`, `beat-hrv-pipeline`, `hrv-time`, `hrv-psd`, `hrv-nonlinear`, `sqi`, `dataset-validate`, `run-simulate`); bundles now include installer-friendly scripts.
+- `elf-gui`: `eframe` dashboard with `StreamingStateRouter`, `Store`, and run-bundle loaders so the same events feed all tabs.
+
+---
+
+## Validation & testing
+
+- `cargo test` covers CLI/lib regression suites, SQI, PSD, nonlinear metrics, and the new run-simulate command.
+- CI runs `cargo fmt`, `cargo clippy`, `cargo build`, `cargo test`, and `elf -- dataset-validate --spec test_data/dataset_suite_core.json`.
+- Extend `test_data/` plus `dataset_suite_core.json` whenever you add new fixtures (RR, WFDB, BIDS, BITalino, run specs).
+
+---
+
+## Installer helpers
+
+`install.sh` lives under `scripts/install.sh`. It downloads a release tarball from `BASE_URL` (default `https://example.com/elf/releases/<version>/elf-<version>-<arch>-<os>.tar.xz`), verifies the SHA256, extracts into `~/.local/opt/elf/<version>`, updates the `current` symlink, and links `elf`, `elf-gui`, and `elf-run` into `~/.local/bin`. Run `scripts/uninstall.sh` to remove the symlinks and `current` pointer.
+
+---
+
+## Contributing
+
+Follow the `AGENTS.md` conventions: use `bd` for tracking, keep ephemeral docs under `history/`, and add regression fixtures under `test_data/`. When you add new datasets run `elf -- dataset-validate` to keep the golden comparison up to date.

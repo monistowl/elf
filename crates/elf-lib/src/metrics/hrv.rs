@@ -270,6 +270,9 @@ fn integrate_band(freqs: &[f64], powers: &[f64], band: (f64, f64)) -> f64 {
 fn welch_psd(rr: &RRSeries, fs_interp: f64) -> (Vec<f64>, Vec<f64>) {
     let signal = interpolate_rr(rr, fs_interp);
     let n = signal.len();
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
     let window = ((fs_interp * 30.0).max(4.0).min(n as f64)) as usize;
     let step = window / 2;
     let mut planner = RealFftPlanner::<f64>::new();

@@ -1,0 +1,14 @@
+{
+  "name": "rr_dataset_b",
+  "input": "test_data/rr_dataset_b.txt",
+  "format": "rr",
+  "fs": 250.0,
+  "interp_fs": 4.0,
+  "tolerance": 0.5,
+  "hrv_time": {
+    "avnn": 0.806
+  },
+  "hrv_psd": {
+    "lf": 22758.298175136802
+  }
+}

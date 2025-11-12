@@ -16,5 +16,9 @@ toml = { workspace = true }
 tempfile = { workspace = true }
 rand = { workspace = true }
 
+[[bin]]
+name = "elf"
+path = "src/main.rs"
+
 [dev-dependencies]
 assert_cmd = "2"

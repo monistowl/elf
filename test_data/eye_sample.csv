@@ -1,0 +1,4 @@
+timestamp,pupil_left,pupil_right,confidence,eye
+0.000,4.10,3.95,0.95,left
+0.020,,3.90,0.92,right
+0.040,4.12,3.88,0.45,left

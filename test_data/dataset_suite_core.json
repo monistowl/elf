@@ -1,0 +1,89 @@
+{
+  "name": "core_regressions",
+  "tolerance": 0.01,
+  "cases": [
+    {
+      "name": "rr_dataset_b",
+      "input": "test_data/rr_dataset_b.txt",
+      "format": "rr",
+      "interp_fs": 4.0,
+      "hrv_time": {
+        "tolerance": 0.0005,
+        "avnn": 0.806,
+        "sdnn": 0.01505545305418159,
+        "rmssd": 0.02494438257849289,
+        "pnn50": 0.0
+      },
+      "hrv_psd": {
+        "tolerance": 5.0,
+        "lf": 22758.298175136802,
+        "hf": 4.820087876986067,
+        "vlf": 0.0,
+        "lf_hf": 4721.552543429404,
+        "total_power": 68305.98088475912
+      }
+    },
+    {
+      "name": "mitdb_100_lead0",
+      "wfdb_header": "test_data/mitdb/100.hea",
+      "wfdb_lead": 0,
+      "interp_fs": 4.0,
+      "hrv_time": {
+        "tolerance": 0.001,
+        "avnn": 0.7597467732884376,
+        "sdnn": 0.1307286747486552,
+        "rmssd": 0.14726362652911074,
+        "pnn50": 0.28589473684210526
+      },
+      "hrv_psd": {
+        "tolerance": 50.0,
+        "lf": 2337.0174809242963,
+        "hf": 4148.322516955657,
+        "vlf": 95616.73371043925,
+        "lf_hf": 0.5633644615075326,
+        "total_power": 303395.83751730894
+      }
+    },
+    {
+      "name": "bids_eye_events",
+      "bids_events": "test_data/bids_sample.tsv",
+      "fs": 250.0,
+      "interp_fs": 4.0,
+      "hrv_time": {
+        "tolerance": 0.0001,
+        "avnn": 0.6,
+        "sdnn": 0.1414213562373095,
+        "rmssd": 0.2,
+        "pnn50": 1.0
+      },
+      "hrv_psd": {
+        "tolerance": 1.0,
+        "lf": 0.0,
+        "hf": 0.0,
+        "vlf": 0.0,
+        "lf_hf": 0.0,
+        "total_power": 20387.755102040817
+      }
+    },
+    {
+      "name": "bitalino_analog0",
+      "bitalino_input": "test_data/bitalino_sample.csv",
+      "bitalino_signal": "analog0",
+      "hrv_time": {
+        "tolerance": 0.0001,
+        "avnn": 0.0,
+        "sdnn": 0.0,
+        "rmssd": 0.0,
+        "pnn50": 0.0
+      },
+      "hrv_psd": {
+        "tolerance": 0.1,
+        "lf": 0.0,
+        "hf": 0.0,
+        "vlf": 0.0,
+        "lf_hf": 0.0,
+        "total_power": 0.0
+      }
+    }
+  ]
+}

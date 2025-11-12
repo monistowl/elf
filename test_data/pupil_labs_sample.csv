@@ -1,0 +1,4 @@
+timestamp,diameter,confidence,eye
+0.0,4.05,0.98,left
+0.02,4.10,0.95,right
+0.04,4.08,0.85,left
