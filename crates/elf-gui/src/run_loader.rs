@@ -29,24 +29,28 @@ pub fn load_manifest(path: &Path) -> Result<RunManifest> {
 
 pub fn load_events(path: &Path) -> Result<Vec<f64>> {
     let mut reader = ReaderBuilder::new()
+        .has_headers(true)
         .delimiter(b'\t')
         .trim(Trim::All)
         .from_path(path)
         .with_context(|| format!("reading events {}", path.display()))?;
+    let headers = reader.headers()?.clone();
+    let onset_idx = headers
+        .iter()
+        .position(|h| h.eq_ignore_ascii_case("onset"))
+        .unwrap_or(0);
+    let event_idx = headers
+        .iter()
+        .position(|h| h.eq_ignore_ascii_case("event_type"))
+        .unwrap_or(2.min(headers.len().saturating_sub(1)));
     let mut times = Vec::new();
     for result in reader.records() {
         let record = result?;
-        if record.is_empty() {
-            continue;
-        }
-        let onset_str = record.get(0).unwrap_or("");
-        if onset_str.eq_ignore_ascii_case("onset") {
-            continue;
-        }
-        let event_type = record.get(4).unwrap_or("");
+        let event_type = record.get(event_idx).unwrap_or("");
         if event_type != "stim" {
             continue;
         }
+        let onset_str = record.get(onset_idx).unwrap_or("");
         let onset = onset_str
             .parse::<f64>()
             .with_context(|| format!("parsing onset {}", onset_str))?;

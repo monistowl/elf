@@ -4,7 +4,7 @@ use egui_plot::{Line, Plot, VLine};
 use elf_lib::detectors::ecg::{run_beat_hrv_pipeline, EcgPipelineConfig};
 use elf_lib::io::{eeg as eeg_io, eye as eye_io, text as text_io, wfdb as wfdb_io};
 use elf_lib::plot::{Figure, Series, Style};
-use elf_lib::signal::{Events, RRSeries, TimeSeries};
+use elf_lib::signal::{Events, TimeSeries};
 use rfd::FileDialog;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -46,10 +46,12 @@ impl GuiTab {
     }
 }
 
+mod hrv_helpers;
 mod router;
 mod run_loader;
 mod store;
 
+use hrv_helpers::{average_rr, heart_rate_from_rr};
 use router::{LslStatus, RecordingStatus, StreamCommand, StreamingStateRouter};
 use run_loader::{events_from_times, load_events, load_manifest, RunManifest};
 use store::Store;
@@ -1035,16 +1037,4 @@ fn color_from_u32(color: u32) -> egui::Color32 {
     let g = ((color >> 8) & 0xFF) as u8;
     let b = (color & 0xFF) as u8;
     egui::Color32::from_rgb(r, g, b)
-}
-
-fn average_rr(rr: &RRSeries) -> Option<f64> {
-    if rr.rr.is_empty() {
-        return None;
-    }
-    let sum = rr.rr.iter().copied().sum::<f64>();
-    Some(sum / rr.rr.len() as f64)
-}
-
-fn heart_rate_from_rr(rr: &RRSeries) -> Option<f64> {
-    average_rr(rr).and_then(|mean| if mean > 0.0 { Some(60.0 / mean) } else { None })
 }
