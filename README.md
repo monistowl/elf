@@ -55,7 +55,7 @@ Load ECGs, annotations, and streaming data. The new `Load run bundle` button (HR
 
 ## Installer helpers
 
-`install.sh` (scripts/install.sh) downloads a release tarball from `BASE_URL` (default `https://example.com/elf/releases/<version>/elf-<version>-<arch>-<os>.tar.xz`), verifies the SHA256, extracts into `~/.local/opt/elf/<version>`, and symlinks `elf`, `elf-gui`, `elf-run`. Run `scripts/uninstall.sh` to remove the symlinks and `current` pointer.
+`install.sh` (scripts/install.sh) downloads a release tarball from `BASE_URL` (default `https://example.com/elf/releases/<version>/elf-<version>-<arch>-<os>.tar.xz`), verifies the SHA256, extracts into `~/.local/opt/elf/<version>`, and symlinks `elf`, `elf-gui`, `elf-run`. CI runs `scripts/package.sh` when a release is published, so tarballs + SHA256s are available for install. Run `scripts/uninstall.sh` to remove the symlinks and `current` pointer.
 
 ---
 
