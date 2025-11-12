@@ -25,6 +25,5 @@ target
 
 /target
 
-# AI planning docs
-history/
+# AI planning docs (we track history/ for planning notes; keep .beads private)
 .beads/
