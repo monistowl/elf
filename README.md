@@ -15,7 +15,7 @@ cargo build --workspace
 
 ### CLI quick tour
 
-Install the suite with `scripts/install.sh` (it unpacks release tarballs into `~/.local/opt/elf/<version>` and symlinks `elf`, `elf-gui`, and `elf-run` into `~/.local/bin`). Once `elf` is on your PATH you can run the headless tools without `cargo run`:
+Install the suite via `scripts/install.sh` (it unpacks a release tarball into `~/.local/opt/elf/<version>` and symlinks `elf`, `elf-gui`, and `elf-run` into `~/.local/bin`). Once `elf` is on your PATH, run:
 
 ```bash
 cat test_data/synthetic_recording_a.txt | elf -- ecg-find-rpeaks --fs 250 | jq
@@ -25,7 +25,7 @@ elf -- hrv-nonlinear --input test_data/tiny_rr.txt | jq
 elf -- run-simulate --design test_data/run_design.toml --trials test_data/run_trials.csv --out /tmp/run
 ```
 
-The `run-simulate` helper reads the TOML/CSV pair described in `STIMULUS_PRESENTER.md`, schedules trials (with optional jitter and randomization policy), emits `events.tsv`/`events.json`, and writes a `run.json` manifest so the GUI can load the exact bundle later.
+`run-simulate` schedules the STIMULUS_PRESENTER TOML/CSV trials, honors jitter/randomization, writes `events.tsv`/`events.json`, and ships a `run.json` manifest so the GUI can load the same bundle later.
 
 ### GUI quick tour
 
@@ -33,32 +33,32 @@ The `run-simulate` helper reads the TOML/CSV pair described in `STIMULUS_PRESENT
 elf-gui
 ```
 
-Load raw ECGs or WFDB/EDF spectra, import annotations, stream synthetic beats, or point the new `Load run bundle` button at a directory containing `events.tsv` + `run.json`. The UI reuses the shared `Figure` model so CLI plots, GUI graphs, and streaming downsampling stay consistent.
+Load ECGs, annotations, and streaming data. The new `Load run bundle` button (HRV tab) points at a directory containing `events.tsv` + `run.json`, reflects manifest stats (ISI/jitter/policy), and feeds the shared `Store`. Legacy GUI controls for streaming, detection, and SQI remain available.
 
 ---
 
 ## Architecture overview
 
-- `elf-lib`: signal I/O for CSV/WFDB/EDF/eye exports, detectors, HRV/SQI metrics, and the shared `Figure/Series` plot model.
-- `elf-cli`: the `elf` binary exposing commands (`ecg-find-rpeaks`, `beat-hrv-pipeline`, `hrv-time`, `hrv-psd`, `hrv-nonlinear`, `sqi`, `dataset-validate`, `run-simulate`); bundles now include installer-friendly scripts.
-- `elf-gui`: `eframe` dashboard with `StreamingStateRouter`, `Store`, and run-bundle loaders so the same events feed all tabs.
+- `elf-lib`: signal I/O (CSV/WFDB/EDF/BITalino/OpenBCI/pupil), detectors, HRV/SQI metrics, and the shared `Figure/Series` plot model.
+- `elf-cli`: the `elf` binary exposing `ecg-find-rpeaks`, `beat-hrv-pipeline`, `hrv-time`, `hrv-psd`, `hrv-nonlinear`, `sqi`, `dataset-validate`, and `run-simulate`; core crates reused by CLI + GUI.
+- `elf-gui`: `eframe` dashboard running the `StreamingStateRouter`, `Store`, and run-bundle loader so CLI and GUI share state.
 
 ---
 
 ## Validation & testing
 
-- `cargo test` covers CLI/lib regression suites, SQI, PSD, nonlinear metrics, and the new run-simulate command.
+- `cargo test` covers the CLI regression suite (including the new run-simulate tests), PSD/nonlinear metrics, and SQI helpers.
 - CI runs `cargo fmt`, `cargo clippy`, `cargo build`, `cargo test`, and `elf -- dataset-validate --spec test_data/dataset_suite_core.json`.
-- Extend `test_data/` plus `dataset_suite_core.json` whenever you add new fixtures (RR, WFDB, BIDS, BITalino, run specs).
+- Extend `test_data/` with new fixtures (RR, WFDB, BIDS, BITalino, run specs) and add them to the dataset suite to lock regressions.
 
 ---
 
 ## Installer helpers
 
-`install.sh` lives under `scripts/install.sh`. It downloads a release tarball from `BASE_URL` (default `https://example.com/elf/releases/<version>/elf-<version>-<arch>-<os>.tar.xz`), verifies the SHA256, extracts into `~/.local/opt/elf/<version>`, updates the `current` symlink, and links `elf`, `elf-gui`, and `elf-run` into `~/.local/bin`. Run `scripts/uninstall.sh` to remove the symlinks and `current` pointer.
+`install.sh` (scripts/install.sh) downloads a release tarball from `BASE_URL` (default `https://example.com/elf/releases/<version>/elf-<version>-<arch>-<os>.tar.xz`), verifies the SHA256, extracts into `~/.local/opt/elf/<version>`, and symlinks `elf`, `elf-gui`, `elf-run`. Run `scripts/uninstall.sh` to remove the symlinks and `current` pointer.
 
 ---
 
 ## Contributing
 
-Follow the `AGENTS.md` conventions: use `bd` for tracking, keep ephemeral docs under `history/`, and add regression fixtures under `test_data/`. When you add new datasets run `elf -- dataset-validate` to keep the golden comparison up to date.
+Follow `AGENTS.md`: use `bd` for issues, keep planning docs under `history/`, and keep the `test_data/` regression fixtures in sync with your changes.
