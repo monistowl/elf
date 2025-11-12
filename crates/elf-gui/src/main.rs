@@ -4,7 +4,7 @@ use egui_plot::{Line, Plot, VLine};
 use elf_lib::detectors::ecg::{run_beat_hrv_pipeline, EcgPipelineConfig};
 use elf_lib::io::{eeg as eeg_io, eye as eye_io, text as text_io, wfdb as wfdb_io};
 use elf_lib::plot::{Figure, Series, Style};
-use elf_lib::signal::{Events, TimeSeries};
+use elf_lib::signal::{Events, RRSeries, TimeSeries};
 use rfd::FileDialog;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -516,6 +516,69 @@ impl ElfApp {
             }
 
             ui.separator();
+            ui.group(|ui| {
+                ui.heading("Live HRV snapshot");
+                if let Some(rr) = self.store.rr_series() {
+                    let hr = heart_rate_from_rr(rr).unwrap_or(0.0);
+                    let mean_rr = average_rr(rr).unwrap_or(0.0);
+                    let latest_rr = *rr.rr.last().unwrap_or(&0.0);
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Heart rate: {hr:.1} bpm"));
+                        ui.label(format!("Mean RR: {mean_rr:.3}s"));
+                        ui.label(format!("Latest RR: {latest_rr:.3}s"));
+                    });
+                    ui.horizontal(|ui| {
+                        if let Some(hrv) = self.store.hrv_time() {
+                            ui.label(format!("RMSSD: {:.3}s", hrv.rmssd));
+                        }
+                        if let Some(psd) = self.store.hrv_psd() {
+                            ui.label(format!("LF/HF: {:.2}", psd.lf_hf));
+                        }
+                        ui.label(format!("Beats: {}", rr.rr.len()));
+                    });
+                } else {
+                    ui.label("Waiting for RR events to compute live stats...");
+                }
+            });
+
+            ui.group(|ui| {
+                ui.heading("Signal Quality (SQI)");
+                if let Some(sqi) = self.store.sqi() {
+                    let ok = sqi.is_acceptable();
+                    let color = if ok {
+                        egui::Color32::LIGHT_GREEN
+                    } else {
+                        egui::Color32::LIGHT_RED
+                    };
+                    ui.colored_label(
+                        color,
+                        format!(
+                            "SQI status: {}",
+                            if ok { "acceptable" } else { "needs review" }
+                        ),
+                    );
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Kurtosis: {:.2}", sqi.kurtosis));
+                        ui.label(format!("SNR: {:.1} dB", sqi.snr));
+                        ui.label(format!("RR CV: {:.2}", sqi.rr_cv));
+                    });
+                    ui.add(
+                        egui::ProgressBar::new((sqi.snr / 20.0).clamp(0.0, 1.0) as f32).text("SNR"),
+                    );
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::ProgressBar::new(((0.2 - sqi.rr_cv).max(0.0) / 0.2) as f32)
+                                .text("RR CV"),
+                        );
+                        ui.label(format!("Spectral entropy: {:.2}", sqi.spectral_entropy));
+                        ui.label(format!("PPG spikes: {:.2}", sqi.ppg_spike_ratio));
+                    });
+                } else {
+                    ui.label("SQI requires ECG + RR before it can evaluate signal quality.");
+                }
+            });
+
+            ui.separator();
             ui.heading("Live LSL stream");
             ui.horizontal(|ui| {
                 ui.label("Type");
@@ -964,4 +1027,16 @@ fn color_from_u32(color: u32) -> egui::Color32 {
     let g = ((color >> 8) & 0xFF) as u8;
     let b = (color & 0xFF) as u8;
     egui::Color32::from_rgb(r, g, b)
+}
+
+fn average_rr(rr: &RRSeries) -> Option<f64> {
+    if rr.rr.is_empty() {
+        return None;
+    }
+    let sum = rr.rr.iter().copied().sum::<f64>();
+    Some(sum / rr.rr.len() as f64)
+}
+
+fn heart_rate_from_rr(rr: &RRSeries) -> Option<f64> {
+    average_rr(rr).and_then(|mean| if mean > 0.0 { Some(60.0 / mean) } else { None })
 }

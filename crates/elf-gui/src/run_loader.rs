@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use csv::{ReaderBuilder, Trim};
 use elf_lib::signal::Events;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RunManifest {
     pub task: String,
     pub design: String,

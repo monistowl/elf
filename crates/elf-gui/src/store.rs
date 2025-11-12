@@ -1,7 +1,10 @@
 use crate::GuiTab;
 use elf_lib::{
     io::eye as eye_io,
-    metrics::hrv::{hrv_nonlinear, hrv_psd, hrv_time, HRVNonlinear, HRVPsd, HRVTime},
+    metrics::{
+        hrv::{hrv_nonlinear, hrv_psd, hrv_time, HRVNonlinear, HRVPsd, HRVTime},
+        sqi::{evaluate_sqi, SQIResult},
+    },
     plot::{decimate_points, figure_from_rr, Color, Figure, LineSeries, Series, Style},
     signal::{Events, RRSeries, TimeSeries},
 };
@@ -19,6 +22,7 @@ struct DirtyFlags {
     psd: bool,
     psd_figure: bool,
     nonlinear: bool,
+    sqi: bool,
     eeg: bool,
     eye: bool,
 }
@@ -32,6 +36,7 @@ impl DirtyFlags {
         self.psd = true;
         self.psd_figure = true;
         self.nonlinear = true;
+        self.sqi = true;
     }
 
     fn mark_events(&mut self) {
@@ -41,6 +46,7 @@ impl DirtyFlags {
         self.psd = true;
         self.psd_figure = true;
         self.nonlinear = true;
+        self.sqi = true;
     }
 }
 
@@ -52,6 +58,7 @@ struct Snapshot {
     hrv_time: Option<HRVTime>,
     hrv_psd: Option<HRVPsd>,
     hrv_nonlinear: Option<HRVNonlinear>,
+    sqi: Option<SQIResult>,
     ecg_figure: Option<Figure>,
     rr_figure: Option<Figure>,
     psd_figure: Option<Figure>,
@@ -81,6 +88,7 @@ impl Default for Store {
                 psd: true,
                 psd_figure: true,
                 nonlinear: true,
+                sqi: true,
                 eeg: true,
                 eye: true,
             },
@@ -123,6 +131,7 @@ impl Store {
         self.dirty.psd = false;
         self.dirty.psd_figure = true;
         self.dirty.nonlinear = false;
+        self.dirty.sqi = true;
     }
 
     pub fn set_eeg(&mut self, ts: TimeSeries) {
@@ -166,6 +175,7 @@ impl Store {
                 self.ensure_psd();
                 self.ensure_psd_figure();
                 self.ensure_nonlinear();
+                self.ensure_sqi();
             }
             GuiTab::Eeg => self.ensure_eeg_figure(),
             GuiTab::Eye => self.ensure_eye_figure(),
@@ -258,6 +268,10 @@ impl Store {
         self.snapshot.eye_samples.len()
     }
 
+    pub fn sqi(&self) -> Option<&SQIResult> {
+        self.snapshot.sqi.as_ref()
+    }
+
     fn ensure_waveform_figure(&mut self) {
         if !self.dirty.waveform {
             return;
@@ -328,6 +342,18 @@ impl Store {
         });
         self.snapshot.psd_figure = figure;
         self.dirty.psd_figure = false;
+    }
+
+    fn ensure_sqi(&mut self) {
+        if !self.dirty.sqi {
+            return;
+        }
+        if let (Some(ts), Some(rr)) = (self.snapshot.ecg.as_ref(), self.snapshot.rr.as_ref()) {
+            self.snapshot.sqi = Some(evaluate_sqi(ts, rr));
+        } else {
+            self.snapshot.sqi = None;
+        }
+        self.dirty.sqi = false;
     }
 
     fn ensure_nonlinear(&mut self) {
