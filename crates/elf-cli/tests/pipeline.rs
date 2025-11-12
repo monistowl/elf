@@ -55,6 +55,31 @@ fn beat_pipeline_matches_expected_metrics() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn beat_pipeline_handles_bids_events() -> Result<(), Box<dyn Error>> {
+    let synthetic = sample_path("test_data/synthetic_recording_a.txt");
+    let bids = sample_path("test_data/bids_sample.tsv");
+
+    let mut cmd = cargo_bin_cmd!("elf");
+    cmd.args([
+        "beat-hrv-pipeline",
+        "--fs",
+        "250",
+        "--input",
+        &synthetic,
+        "--bids-events",
+        &bids,
+    ]);
+    let output = cmd.assert().success().get_output().stdout.clone();
+    let actual: PipelineOutput = serde_json::from_slice(&output)?;
+
+    assert_close(actual.hrv.avnn, 0.6, 1e-6);
+    assert_close(actual.hrv.sdnn, 0.1414213562373095, 1e-6);
+    assert_close(actual.hrv.rmssd, 0.2, 1e-6);
+    assert_close(actual.hrv.pnn50, 1.0, 1e-6);
+    Ok(())
+}
+
+#[test]
 fn beat_pipeline_handles_mitdb_record() -> Result<(), Box<dyn Error>> {
     let test_data_dir = workspace_root().join("test_data");
     let header = test_data_dir.join("mitdb/100.hea");
@@ -102,4 +127,11 @@ fn workspace_root() -> PathBuf {
         .parent()
         .expect("workspace root")
         .to_path_buf()
+}
+
+fn sample_path(relative: &str) -> String {
+    workspace_root()
+        .join(relative)
+        .to_string_lossy()
+        .to_string()
 }

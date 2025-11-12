@@ -21,10 +21,24 @@ fn pupil_normalize_outputs_json() -> Result<(), Box<dyn Error>> {
         .filter(|line| !line.is_empty())
         .collect();
     assert_eq!(lines.len(), 2);
-    for line in lines {
-        let json: Value = serde_json::from_slice(line)?;
-        assert!(json.get("pupil_mm").is_some());
-    }
+
+    let first: Value = serde_json::from_slice(lines[0])?;
+    let second: Value = serde_json::from_slice(lines[1])?;
+
+    assert!(first.get("pupil_mm").is_some());
+    assert!(second.get("pupil_mm").is_some());
+    assert_eq!(first.get("eye").and_then(Value::as_str), Some("Left"));
+    assert_eq!(second.get("eye").and_then(Value::as_str), Some("Right"));
+    assert!(first
+        .get("confidence")
+        .and_then(Value::as_f64)
+        .map(|v| (v - 0.98).abs() < 1e-6)
+        .unwrap_or(false));
+    assert!(second
+        .get("confidence")
+        .and_then(Value::as_f64)
+        .map(|v| (v - 0.95).abs() < 1e-6)
+        .unwrap_or(false));
     Ok(())
 }
 
