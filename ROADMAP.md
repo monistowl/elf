@@ -45,10 +45,16 @@ Key Rust crates to lean on:
 * Welch PSD; LF/HF/VLF; Poincaré (SD1/SD2); DFA, sample entropy.
 * CLI: `hrv-psd`, `hrv-nonlinear`.
 
+**Status (November 12, 2025):** Welch PSD + LF/HF/VLF integration now lives in `elf-lib::metrics::hrv`, feeding both the CLI (`hrv-psd`) and the GUI frequency plots. Nonlinear metrics expose SD1/SD2, sample entropy, and DFA alpha1 via `hrv-nonlinear`, with regression tests guarding the math.
+
 **M3 — Live streaming & dashboard (2–3 weeks)**
 
 * LSL subscribe, record to Parquet; egui dashboard: live plots, bandpass options, “compute HRV live” panel.
 * Optional audio biofeedback (RMSSD → tone via `cpal`).
+
+**Status (November 12, 2025):** Introduced a `StreamingStateRouter` inside `elf-gui` that queues ECG/annotation chunks using `crossbeam-channel` and lets a worker compute RR/PSD/nonlinear metrics before routing snapshots to the active tab, keeping heavy math off the UI thread.
+The HRV tab exposes a "Stream synthetic beats" button so you can exercise this background pipeline with reference RR chunks without needing live hardware.
+Processing the synthetic ECG recording now funnels the entire waveform through the router worker, so beat detection and HRV calculations happen on a background thread rather than blocking the GUI.
 
 **M4 — Device adapters & SQIs (ongoing)**
 

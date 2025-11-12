@@ -1,3 +1,4 @@
+use crossbeam_channel::{bounded, Sender};
 use eframe::{egui, egui::ViewportBuilder};
 use egui_plot::{Line, Plot, VLine};
 use elf_lib::detectors::ecg::{run_beat_hrv_pipeline, EcgPipelineConfig};
@@ -5,7 +6,10 @@ use elf_lib::io::{eeg as eeg_io, eye as eye_io, text as text_io, wfdb as wfdb_io
 use elf_lib::plot::{Figure, Series, Style};
 use elf_lib::signal::{Events, TimeSeries};
 use rfd::FileDialog;
-use std::path::Path;
+use std::env;
+use std::path::{Path, PathBuf};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
@@ -42,7 +46,10 @@ impl GuiTab {
     }
 }
 
+mod router;
 mod store;
+
+use router::{StreamCommand, StreamingStateRouter};
 use store::Store;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -87,8 +94,78 @@ impl EyeLayout {
     }
 }
 
+const SYNTHETIC_RR: [f64; 12] = [
+    0.82, 0.78, 0.8, 0.79, 0.83, 0.77, 0.84, 0.88, 0.86, 0.81, 0.79, 0.82,
+];
+const STREAM_CHUNK_SIZE: usize = 4;
+const STREAM_INTERVAL_MS: u64 = 450;
+
+fn synthetic_event_indices(fs: f64) -> Vec<usize> {
+    let mut events = Vec::with_capacity(SYNTHETIC_RR.len() + 1);
+    let mut t = 0.0;
+    events.push(0);
+    for &rr in SYNTHETIC_RR.iter() {
+        t += rr;
+        events.push((t * fs).round() as usize);
+    }
+    events
+}
+
+struct StreamingSimulator {
+    stop_tx: Sender<()>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl StreamingSimulator {
+    fn start(cmd_sender: Sender<StreamCommand>, fs: f64) -> Self {
+        let (stop_tx, stop_rx) = bounded(1);
+        let handle = std::thread::spawn(move || {
+            let indices = synthetic_event_indices(fs);
+            for chunk in indices.chunks(STREAM_CHUNK_SIZE) {
+                if chunk.is_empty() {
+                    continue;
+                }
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+                let events = Events::from_indices(chunk.to_vec());
+                if cmd_sender
+                    .send(StreamCommand::IngestEvents(events, fs))
+                    .is_err()
+                {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(STREAM_INTERVAL_MS));
+            }
+        });
+        Self {
+            stop_tx,
+            handle: Some(handle),
+        }
+    }
+
+    fn stop(mut self) {
+        let _ = self.stop_tx.send(());
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+fn synthetic_recording_path() -> PathBuf {
+    workspace_root().join("test_data/synthetic_recording_a.txt")
+}
+
 struct ElfApp {
-    store: Store,
+    store: StreamingStateRouter,
     raw_path: Option<String>,
     annotation_path: Option<String>,
     fs: f64,
@@ -104,12 +181,13 @@ struct ElfApp {
     eye_min_conf: f32,
     eye_status: String,
     eye_layout: EyeLayout,
+    stream_simulator: Option<StreamingSimulator>,
 }
 
 impl Default for ElfApp {
     fn default() -> Self {
         Self {
-            store: Store::new(),
+            store: StreamingStateRouter::new(Store::new()),
             raw_path: None,
             annotation_path: None,
             fs: 250.0,
@@ -123,6 +201,7 @@ impl Default for ElfApp {
             eye_min_conf: 0.5,
             eye_status: "No eye data".into(),
             eye_layout: EyeLayout::PupilLabs,
+            stream_simulator: None,
         }
     }
 }
@@ -189,7 +268,8 @@ impl ElfApp {
             }
         };
 
-        self.store.set_events(events);
+        let fs = self.store.ecg().map(|ts| ts.fs).unwrap_or(self.fs).max(1.0);
+        self.store.submit_events(events, fs);
         self.annotation_path = Some(path.display().to_string());
         self.status = format!("Loaded {} annotations", self.store.events_len());
         Ok(())
@@ -203,8 +283,32 @@ impl ElfApp {
         let cfg = EcgPipelineConfig::default();
         let result = run_beat_hrv_pipeline(ts, &cfg);
         let beats = result.events.indices.len();
-        self.store.set_events(result.events);
+        self.store.submit_events(result.events, ts.fs.max(1.0));
         self.status = format!("Detected {} beats", beats);
+        Ok(())
+    }
+
+    fn toggle_streaming(&mut self) {
+        if let Some(sim) = self.stream_simulator.take() {
+            sim.stop();
+            self.status = "Stopped synthetic stream".into();
+        } else {
+            let fs = self.fs.max(1.0);
+            self.stream_simulator =
+                Some(StreamingSimulator::start(self.store.command_sender(), fs));
+            self.status = "Streaming synthetic beats".into();
+        }
+    }
+
+    fn process_synthetic_ecg(&mut self) -> Result<(), String> {
+        let path = synthetic_recording_path();
+        let samples = text_io::read_f64_series(&path).map_err(|e| e.to_string())?;
+        let ts = TimeSeries {
+            fs: self.fs.max(1.0),
+            data: samples,
+        };
+        self.store.submit_ecg(ts);
+        self.status = format!("Queued synthetic ECG ({})", path.display());
         Ok(())
     }
 
@@ -305,6 +409,21 @@ impl ElfApp {
                 }
             }
 
+            let stream_label = if self.stream_simulator.is_some() {
+                "Stop synthetic stream"
+            } else {
+                "Stream synthetic beats"
+            };
+            if ui.button(stream_label).clicked() {
+                self.toggle_streaming();
+            }
+
+            if ui.button("Process synthetic ECG").clicked() {
+                if let Err(err) = self.process_synthetic_ecg() {
+                    self.status = err;
+                }
+            }
+
             ui.separator();
             if let Some(raw) = &self.raw_path {
                 ui.horizontal(|ui| {
@@ -400,6 +519,7 @@ impl ElfApp {
                     ui.label(format!("SD1: {:.3}s", nl.sd1));
                     ui.label(format!("SD2: {:.3}s", nl.sd2));
                     ui.label(format!("SampEn: {:.3}", nl.samp_entropy));
+                    ui.label(format!("DFA alpha1: {:.3}", nl.dfa_alpha1));
                 });
             }
         });
@@ -571,6 +691,14 @@ impl ElfApp {
     }
 }
 
+impl Drop for ElfApp {
+    fn drop(&mut self) {
+        if let Some(sim) = self.stream_simulator.take() {
+            sim.stop();
+        }
+    }
+}
+
 impl eframe::App for ElfApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
@@ -588,7 +716,7 @@ impl eframe::App for ElfApp {
             });
         });
 
-        self.store.prepare(self.active_tab);
+        self.store.prepare_active_tab(self.active_tab);
 
         match self.active_tab {
             GuiTab::Landing => {
