@@ -2,17 +2,18 @@
 
 * `elf-lib` (no_std-lean where possible)
 
-  * Signal I/O: CSV/Parquet/Arrow ingestion + writers (Polars/Arrow).
+  * Signal I/O: CSV/Parquet/Arrow ingestion + writers (Polars/Arrow) plus WFDB/EDF/BIDS/Eye adapters for raw ECG/EEG and pupil exports.
   * Core DSP: filtering (IIR/biquad), resampling, windowing, FFT/Welch PSD.
   * ECG/PPG: peak detection (Pan-Tompkins style & adaptive alternatives), beat-to-beat series, SQI, artifact handling.
   * HRV metrics: time, frequency, nonlinear, Poincaré, DFA.
+  * Plot model: shared `Figure`/`Series` + decimation helpers keep CLI PNGs and egui panels in sync without dragging GUI deps into `elf-lib`.
   * Streaming: LSL bindings for live sensors.
 * `elf-cli` (clap)
 
-  * Unixy subcommands: `ecg-find-rpeaks`, `rr-clean`, `hrv-time`, `hrv-psd`, `hrv-nonlinear`, `ppg-clean`, `sqi`, etc. Pipeable stdin→stdout.
+  * Unixy subcommands: `ecg-find-rpeaks`, `rr-clean`, `beat-hrv-pipeline`, `hrv-time`, `hrv-psd`, `hrv-nonlinear`, `hrv-plot`, `pupil-normalize`, `ppg-clean`, `sqi`, etc. Commands can read WFDB headers, EDF/BIDS traces, or pupil CSV/TSV before piping into the shared `Figure` model and PNG exports, and observed test_data (MIT-BIH, synthetic RR, pupil/Tobii samples) already serve as regression fixtures.
 * `elf-gui` (egui/eframe)
 
-  * “Link device → live plots → record → compute” dashboard. Same `elf-lib` API. Build once, run native or Wasm.
+  * Multi-tab dashboard (landing / ECG-HRV / EEG / eye-tracking) that mirrors the CLI plot model, lets you load raw ECGs or WFDB headers, import .atr/BIDS/CSV annotations, detect beats, and drop into dedicated EEG/eye tracking tabs, all while keeping per-tab `egui_plot` nodes decimated and cached.
 * `elf-web`
 
   * Static docs + sample datasets, later a SaaS thin layer. Keep it separate from the local-first flow.
@@ -55,6 +56,18 @@ Key Rust crates to lean on:
 
 ---
 
+## Validation snapshots & future stretch goals
+
+* `test_data/` carries real samples—MIT-BIH `100.{hea,dat,atr}` for R-peak validation, `tiny_rr.txt` and synthetic RR gold outputs, BIDS `events.tsv`, and Pupil/Tobii eye exports—so CLI tests/GUI filters already exercise the formats we advertise.
+* `plot` module in `elf-lib` now serves both `elf-cli` (PNG `hrv-plot`) and `elf-gui` (egui plots) so new dashboards can reuse the same decimated series without recreating buffers.
+* Next stretch goals: wire `elf-gui` tabs to live `Store` snapshots, surface more derived metrics per modality (EEG epochs, pupil dilation), and keep the multi-target builds (linux/x11, macOS, Windows, WASM) tidy.
+
+## Next focus
+
+1. **M3 streaming & state router** — finish LSL ingest + Parquet recording, add a reducer that feeds snapshots to whichever tab is visible, and keep worker threads computing PSD/nonlinear HRV off the UI thread.
+2. **Dataset coverage & automation** — expand PhysioNet/BIDS fixtures, add automated validation (golden RR + PSD comparisons) for each format, and keep new data in `test_data/` to lock regressions.
+3. **UI polish** — stabilize tab interactions, add zoom/selection/decimation controls that reuse the shared `Figure`, cache derived curves across tabs, and surface more HRV/EEG/eye metrics in the dashboard.
+
 # High-quality open repos to mine/port (starter list)
 
 These are battle-tested codebases (mostly Python/C/C++) with algorithms you can re-implement cleanly in Rust. I’ve grouped them by what they’re best for.
@@ -75,6 +88,7 @@ These are battle-tested codebases (mostly Python/C/C++) with algorithms you can 
 * **PhysioNet RR interval sets** — healthy, CHF, CAST etc. for validation and CI regression. ([PhysioNet][5])
 * **BITalino OpenSignals reader & sample data** — spec + examples to ensure `elf-lib` can open labs’ CSV/HDF5. ([GitHub][6])
 * **MNE-Python** (EEG/MEG) — if you later branch into ERPs/EEG; not HRV, but great I/O & preprocessing reference. ([GitHub][12])
+* **MIT-BIH & BIDS eye/EEG samples** — track the test data samples we already mirror (MIT-BIH ECG `.hea/.dat/.atr`, Pupil/Tobii CSV/TSV, BIDS events) for validation and regression.
 
 ### Streaming
 

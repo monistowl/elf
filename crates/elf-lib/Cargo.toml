@@ -11,6 +11,9 @@ serde_json = { workspace = true }
 num-traits = { workspace = true }
 realfft = { workspace = true }
 polars = { workspace = true, optional = true }
+csv = { workspace = true }
+edf-reader = { workspace = true }
+wfdb-rust = "0.3"
 
 [features]
 default = []

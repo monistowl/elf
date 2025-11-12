@@ -9,6 +9,36 @@ eframe = { workspace = true }
 egui = { workspace = true }
 egui_plot = { workspace = true }
 elf-lib = { path = "../elf-lib" }
+rfd = "0.14"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Enable Linux-specific Wayland/X11 features so winit picks the X11 backend at build time.
+eframe = { workspace = true, features = ["x11", "wayland"] }
+[target.'cfg(target_os = "linux")'.dependencies.winit]
+workspace = true
+default-features = false
+features = ["rwh_06", "x11", "wayland", "wayland-dlopen"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+eframe = { workspace = true }
+[target.'cfg(target_os = "macos")'.dependencies.winit]
+workspace = true
+default-features = false
+features = ["rwh_06"]
+
+[target.'cfg(target_os = "windows")'.dependencies]
+eframe = { workspace = true }
+[target.'cfg(target_os = "windows")'.dependencies.winit]
+workspace = true
+default-features = false
+features = ["rwh_06"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+eframe = { workspace = true }
+[target.'cfg(target_arch = "wasm32")'.dependencies.winit]
+workspace = true
+default-features = false
+features = ["rwh_06"]
 
 [features]
 default = ["native"]

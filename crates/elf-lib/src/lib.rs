@@ -1,6 +1,7 @@
 pub mod detectors;
 pub mod io;
 pub mod metrics;
+pub mod plot;
 pub mod signal;
 
 pub use detectors::*;

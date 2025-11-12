@@ -1,3 +1,4 @@
+<INSTRUCTIONS>
 # AGENTS
 
 ## Issue Tracking with bd (beads)
@@ -20,7 +21,7 @@ bd ready --json
 
 **Create new issues:**
 ```bash
-bd create "Issue title" -t bug|feature|task -p 0-4 --json
+bd create "Issue title" -t bug|feature -p 0-4 --json
 bd create "Issue title" -p 1 --deps discovered-from:bd-123 --json
 ```
 
@@ -129,3 +130,5 @@ history/
 - ❌ Do NOT clutter repo root with planning documents
 
 For more details, see README.md and QUICKSTART.md.
+
+</INSTRUCTIONS>

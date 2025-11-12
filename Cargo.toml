@@ -26,3 +26,7 @@ arrow = { package = "arrow2", version = "0.18" }
 egui = "0.30"
 eframe = { version = "0.30", default-features = false, features = ["glow"] }
 egui_plot = "0.30"
+plotters = "0.3"
+csv = "1"
+edf-reader = "0.6"
+winit = { version = "0.30", default-features = false }
