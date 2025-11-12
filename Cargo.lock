@@ -1316,7 +1316,7 @@ checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
 name = "elf-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1334,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "elf-gui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arrow2",
@@ -1354,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "elf-lib"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "csv",
