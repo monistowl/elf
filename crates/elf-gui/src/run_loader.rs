@@ -19,12 +19,6 @@ pub struct RunManifest {
     pub start_time_unix: f64,
 }
 
-#[derive(Debug, Deserialize)]
-struct RunEventRecord {
-    onset: f64,
-    event_type: String,
-}
-
 pub fn load_manifest(path: &Path) -> Result<RunManifest> {
     let file =
         fs::File::open(path).with_context(|| format!("reading manifest {}", path.display()))?;
@@ -40,11 +34,23 @@ pub fn load_events(path: &Path) -> Result<Vec<f64>> {
         .from_path(path)
         .with_context(|| format!("reading events {}", path.display()))?;
     let mut times = Vec::new();
-    for result in reader.deserialize::<RunEventRecord>() {
+    for result in reader.records() {
         let record = result?;
-        if record.event_type == "stim" {
-            times.push(record.onset);
+        if record.is_empty() {
+            continue;
         }
+        let onset_str = record.get(0).unwrap_or("");
+        if onset_str.eq_ignore_ascii_case("onset") {
+            continue;
+        }
+        let event_type = record.get(4).unwrap_or("");
+        if event_type != "stim" {
+            continue;
+        }
+        let onset = onset_str
+            .parse::<f64>()
+            .with_context(|| format!("parsing onset {}", onset_str))?;
+        times.push(onset);
     }
     Ok(times)
 }

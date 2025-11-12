@@ -104,6 +104,26 @@
         "lf_hf": 0.0,
         "total_power": 0.0
       }
+    },
+    {
+      "name": "run_bundle_stim",
+      "annotations": "test_data/run_bundle/events.idx",
+      "fs": 250.0,
+      "hrv_time": {
+        "tolerance": 0.0005,
+        "avnn": 1.3,
+        "sdnn": 0.0,
+        "rmssd": 0.0,
+        "pnn50": 0.0
+      },
+      "hrv_psd": {
+        "tolerance": 5.0,
+        "lf": 0.0,
+        "hf": 2928.994082840236,
+        "vlf": 0.0,
+        "lf_hf": 0.0,
+        "total_power": 8786.98224852071
+      }
     }
   ]
 }

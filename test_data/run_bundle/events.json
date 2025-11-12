@@ -1,0 +1,20 @@
+{
+  "columns": {
+    "block": {},
+    "condition": {},
+    "duration": {
+      "units": "seconds"
+    },
+    "event_type": {},
+    "onset": {
+      "units": "seconds"
+    },
+    "resp_key": {},
+    "resp_rt": {
+      "units": "seconds"
+    },
+    "stim_id": {},
+    "trial": {},
+    "value": {}
+  }
+}
