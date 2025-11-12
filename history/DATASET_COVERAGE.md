@@ -5,3 +5,5 @@
 - New history note keeps an audit trail, matching our policy of recording AI-generated planning docs under `history/` and never staging them.
 
 - Added `run_bundle_stim` to the dataset suite: a newline list of run-simulate stimulus onsets lives in `test_data/run_bundle/events.idx`, and dataset-validate now ensures the GUI/CLI replay the same HRV/RRPS specs that presenters expect.
+
+- Added `scripts/generate_run_bundle.sh` so the presenter's `run-simulate` fixtures can be recreated on demand (dataset-validate now invokes it before touching `test_data/run_bundle`). The run bundle files are no longer tracked in Git, avoiding history bloat while keeping verification deterministic.

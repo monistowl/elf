@@ -22,11 +22,27 @@ use std::{
     fs::{self, File},
     io::{self, Read},
     path::{Path, PathBuf},
+    process::Command,
 };
 mod run;
 use run::{
     read_design, read_trials, simulate_run, write_events_json, write_events_tsv, write_manifest,
 };
+fn ensure_run_bundle(repo_root: &Path) -> Result<()> {
+    let bundle_dir = repo_root.join("test_data/run_bundle");
+    if bundle_dir.join("events.idx").exists() {
+        return Ok(());
+    }
+    let script = repo_root.join("scripts/generate_run_bundle.sh");
+    let status = Command::new(script)
+        .current_dir(repo_root)
+        .status()
+        .context("running run bundle generator")?;
+    if !status.success() {
+        anyhow::bail!("run bundle generator failed")
+    }
+    Ok(())
+}
 
 #[derive(Parser)]
 #[command(
@@ -509,6 +525,13 @@ fn rr_series_from_case(
                 case.name
             )
         })?;
+        if annotation_path
+            .as_deref()
+            .map(|p| p.components().any(|comp| comp.as_os_str() == "run_bundle"))
+            .unwrap_or(false)
+        {
+            ensure_run_bundle(repo_root)?;
+        }
         if let Some(events) =
             load_annotation_events(annotation_path.as_deref(), bids_events_path.as_deref(), fs)?
         {

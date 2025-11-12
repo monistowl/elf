@@ -27,3 +27,5 @@ target
 
 # AI planning docs (we track history/ for planning notes; keep .beads private)
 .beads/
+# Generated run bundles
+test_data/run_bundle/
