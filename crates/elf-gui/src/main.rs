@@ -578,6 +578,14 @@ impl ElfApp {
                 }
             });
 
+            if let Some(hist) = self.store.rr_histogram() {
+                ui.separator();
+                ui.heading("RR histogram");
+                Plot::new("rr_hist_plot").height(140.0).show(ui, |plot_ui| {
+                    plot_plot_figure(plot_ui, hist);
+                });
+            }
+
             ui.separator();
             ui.heading("Live LSL stream");
             ui.horizontal(|ui| {

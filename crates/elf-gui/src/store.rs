@@ -23,6 +23,7 @@ struct DirtyFlags {
     psd_figure: bool,
     nonlinear: bool,
     sqi: bool,
+    rr_histogram: bool,
     eeg: bool,
     eye: bool,
 }
@@ -37,6 +38,7 @@ impl DirtyFlags {
         self.psd_figure = true;
         self.nonlinear = true;
         self.sqi = true;
+        self.rr_histogram = true;
     }
 
     fn mark_events(&mut self) {
@@ -47,6 +49,7 @@ impl DirtyFlags {
         self.psd_figure = true;
         self.nonlinear = true;
         self.sqi = true;
+        self.rr_histogram = true;
     }
 }
 
@@ -62,6 +65,7 @@ struct Snapshot {
     ecg_figure: Option<Figure>,
     rr_figure: Option<Figure>,
     psd_figure: Option<Figure>,
+    rr_histogram: Option<Figure>,
     eeg: Option<TimeSeries>,
     eeg_events: Vec<f64>,
     eeg_figure: Option<Figure>,
@@ -89,6 +93,7 @@ impl Default for Store {
                 psd_figure: true,
                 nonlinear: true,
                 sqi: true,
+                rr_histogram: true,
                 eeg: true,
                 eye: true,
             },
@@ -176,6 +181,7 @@ impl Store {
                 self.ensure_psd_figure();
                 self.ensure_nonlinear();
                 self.ensure_sqi();
+                self.ensure_rr_histogram();
             }
             GuiTab::Eeg => self.ensure_eeg_figure(),
             GuiTab::Eye => self.ensure_eye_figure(),
@@ -233,6 +239,10 @@ impl Store {
     #[allow(dead_code)]
     pub fn rr_figure(&self) -> Option<&Figure> {
         self.snapshot.rr_figure.as_ref()
+    }
+
+    pub fn rr_histogram(&self) -> Option<&Figure> {
+        self.snapshot.rr_histogram.as_ref()
     }
 
     pub fn psd_figure(&self) -> Option<&Figure> {
@@ -308,6 +318,18 @@ impl Store {
         self.dirty.rr_figure = false;
     }
 
+    fn ensure_rr_histogram(&mut self) {
+        if !self.dirty.rr_histogram {
+            return;
+        }
+        if let Some(rr) = self.snapshot.rr.as_ref() {
+            self.snapshot.rr_histogram = Self::histogram_figure(rr, 12);
+        } else {
+            self.snapshot.rr_histogram = None;
+        }
+        self.dirty.rr_histogram = false;
+    }
+
     fn ensure_hrv_time(&mut self) {
         if !self.dirty.hrv {
             return;
@@ -366,6 +388,44 @@ impl Store {
             self.snapshot.hrv_nonlinear = None;
         }
         self.dirty.nonlinear = false;
+    }
+
+    fn histogram_figure(rr: &RRSeries, bins: usize) -> Option<Figure> {
+        if rr.rr.is_empty() || bins == 0 {
+            return None;
+        }
+        let min_rr = rr.rr.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_rr = rr.rr.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        if (max_rr - min_rr).abs() < f64::EPSILON {
+            return None;
+        }
+        let width = (max_rr - min_rr) / bins as f64;
+        let mut counts = vec![0u32; bins];
+        for &value in &rr.rr {
+            let idx = ((value - min_rr) / width).floor() as usize;
+            let idx = idx.min(bins - 1);
+            counts[idx] += 1;
+        }
+        let total = counts.iter().sum::<u32>() as f64;
+        let points: Vec<[f64; 2]> = counts
+            .iter()
+            .enumerate()
+            .map(|(i, &count)| {
+                let bin_center = min_rr + width * (i as f64 + 0.5);
+                [bin_center, count as f64 / total]
+            })
+            .collect();
+        let mut figure = Figure::new(Some("RR histogram".to_string()));
+        figure.add_series(Series::Line(LineSeries {
+            name: "RR distr".into(),
+            points,
+            style: Style {
+                width: 2.0,
+                dash: None,
+                color: Color(0xFFAA00),
+            },
+        }));
+        Some(figure)
     }
 
     fn ensure_eeg_figure(&mut self) {
