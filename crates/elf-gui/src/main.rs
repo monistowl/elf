@@ -433,12 +433,16 @@ impl ElfApp {
             load_events(&events_path).map_err(|e| format!("Run events load failed: {}", e))?;
         let fs = self.store.ecg().map(|ts| ts.fs).unwrap_or(self.fs).max(1.0);
         let events = events_from_times(&times, fs);
-        self.store.set_events(events);
+        self.store.submit_events(events, fs);
         let manifest = load_manifest(&manifest_path)
             .map_err(|e| format!("Run manifest load failed: {}", e))?;
         self.run_bundle_path = Some(path.display().to_string());
         self.run_manifest = Some(manifest);
-        self.status = format!("Loaded run bundle from {}", path.display());
+        self.status = format!(
+            "Loaded run bundle from {} ({} stimuli)",
+            path.display(),
+            times.len()
+        );
         Ok(())
     }
 
