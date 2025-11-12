@@ -27,7 +27,7 @@ impl Default for EcgPipelineConfig {
             lowcut_hz: 5.0,
             highcut_hz: 15.0,
             integration_window_s: 0.150,
-            min_rr_s: 0.280,
+            min_rr_s: 0.120,
             threshold_scale: 0.3,
             search_back_s: 0.150,
         }
@@ -274,6 +274,9 @@ fn fallback_peak_picker(ts: &TimeSeries, cfg: &EcgPipelineConfig) -> Vec<usize> 
 mod tests {
     use super::*;
 
+    use crate::io::wfdb as wfdb_io;
+    use std::path::PathBuf;
+
     #[test]
     fn detects_regular_beats() {
         let fs = 250.0;
@@ -318,5 +321,70 @@ mod tests {
             data.push(v);
         }
         TimeSeries { fs, data }
+    }
+
+    #[test]
+    fn detector_matches_mitdb_118_annotations() {
+        let root = workspace_root();
+        let header = root.join("test_data/mitdb/118.hea");
+        let annotations = root.join("test_data/mitdb/118.atr");
+        let ts = wfdb_io::load_wfdb_lead(&header, 0).expect("load MIT-BIH lead");
+        let detected = detect_r_peaks_with_config(&ts, &EcgPipelineConfig::default());
+        let ann = wfdb_io::load_wfdb_events(&annotations).expect("load MIT-BIH annotations");
+        let tolerance = ((0.04 * ts.fs).round() as usize).max(2);
+        let matches = count_matches(&ann.indices, &detected.indices, tolerance);
+        let coverage = matches as f64 / ann.indices.len() as f64;
+        assert!(
+            coverage >= 0.96,
+            "detector coverage too low: {}/{} ({:.1}%)",
+            matches,
+            ann.indices.len(),
+            coverage * 100.0
+        );
+        let false_positive = detected.indices.len().saturating_sub(matches);
+        let max_false_positive = ((ann.indices.len() as f64) * 0.15).ceil() as usize;
+        assert!(
+            false_positive <= max_false_positive,
+            "too many extra detections: {} (limit {})",
+            false_positive,
+            max_false_positive
+        );
+    }
+
+    fn count_matches(ann: &[usize], det: &[usize], tol: usize) -> usize {
+        if ann.is_empty() || det.is_empty() {
+            return 0;
+        }
+        let mut matches = 0;
+        let mut idx = 0;
+        for &ann_sample in ann {
+            while idx < det.len() && det[idx] + tol < ann_sample {
+                idx += 1;
+            }
+            if idx < det.len() {
+                let diff = (det[idx] as isize - ann_sample as isize).abs() as usize;
+                if diff <= tol {
+                    matches += 1;
+                    continue;
+                }
+            }
+            if idx > 0 {
+                let prev = det[idx - 1];
+                let diff = (prev as isize - ann_sample as isize).abs() as usize;
+                if diff <= tol {
+                    matches += 1;
+                }
+            }
+        }
+        matches
+    }
+
+    fn workspace_root() -> PathBuf {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf()
     }
 }

@@ -100,7 +100,7 @@ enum Commands {
     EcgFindRpeaks {
         #[arg(long, default_value_t = 250.0)]
         fs: f64,
-        #[arg(long, default_value_t = 0.3)]
+        #[arg(long, default_value_t = 0.12)]
         min_rr_s: f64,
         #[arg(long)]
         input: Option<PathBuf>,
@@ -128,7 +128,7 @@ enum Commands {
         highcut_hz: f64,
         #[arg(long, default_value_t = 0.150)]
         integration_window_s: f64,
-        #[arg(long, default_value_t = 0.280)]
+        #[arg(long, default_value_t = 0.12)]
         min_rr_s: f64,
         #[arg(long, default_value_t = 0.3)]
         threshold_scale: f64,
