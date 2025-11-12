@@ -50,7 +50,7 @@ mod router;
 mod run_loader;
 mod store;
 
-use router::{StreamCommand, StreamingStateRouter};
+use router::{LslStatus, RecordingStatus, StreamCommand, StreamingStateRouter};
 use run_loader::{events_from_times, load_events, load_manifest, RunManifest};
 use store::Store;
 
@@ -186,6 +186,9 @@ struct ElfApp {
     stream_simulator: Option<StreamingSimulator>,
     run_bundle_path: Option<String>,
     run_manifest: Option<RunManifest>,
+    lsl_query: String,
+    lsl_chunk_samples: usize,
+    lsl_fs_hint: f64,
 }
 
 impl Default for ElfApp {
@@ -208,6 +211,9 @@ impl Default for ElfApp {
             stream_simulator: None,
             run_bundle_path: None,
             run_manifest: None,
+            lsl_query: "ECG".into(),
+            lsl_chunk_samples: 256,
+            lsl_fs_hint: 250.0,
         }
     }
 }
@@ -316,6 +322,65 @@ impl ElfApp {
         self.store.submit_ecg(ts);
         self.status = format!("Queued synthetic ECG ({})", path.display());
         Ok(())
+    }
+
+    fn toggle_lsl_stream(&mut self) {
+        if self.store.is_lsl_streaming() {
+            self.store.stop_lsl_stream();
+            self.status = "Stopped LSL inlet".into();
+            return;
+        }
+        let query = self.lsl_query.trim();
+        if query.is_empty() {
+            self.status = "Provide an LSL stream type before connecting".into();
+            return;
+        }
+        let chunk = self.lsl_chunk_samples.max(1);
+        let fs_hint = if self.lsl_fs_hint.is_finite() && self.lsl_fs_hint > 0.0 {
+            Some(self.lsl_fs_hint)
+        } else {
+            None
+        };
+        match self
+            .store
+            .start_lsl_stream(query.to_string(), chunk, fs_hint)
+        {
+            Ok(_) => {
+                self.status = format!("Resolving LSL stream ({query})");
+            }
+            Err(err) => {
+                self.status = format!("LSL connect failed: {err}");
+            }
+        }
+    }
+
+    fn start_recording_dialog(&mut self) {
+        if let Some(path) = FileDialog::new()
+            .add_filter("Parquet", &["parquet"])
+            .set_file_name("recording.parquet")
+            .save_file()
+        {
+            let fs = self.store.ecg().map(|ts| ts.fs).unwrap_or(self.fs).max(1.0);
+            match self.store.start_recording(path.clone(), fs) {
+                Ok(_) => {
+                    self.status = format!("Recording to {}", path.display());
+                }
+                Err(err) => {
+                    self.status = format!("Recording failed: {err}");
+                }
+            }
+        }
+    }
+
+    fn stop_recording(&mut self) {
+        match self.store.stop_recording() {
+            Ok(_) => {
+                self.status = "Stopped recording".into();
+            }
+            Err(err) => {
+                self.status = format!("Recording stop failed: {err}");
+            }
+        }
     }
 
     fn load_eeg_trace(&mut self, path: &Path, channel: usize) -> Result<(), String> {
@@ -445,6 +510,86 @@ impl ElfApp {
                     self.status = err;
                 }
             }
+
+            ui.separator();
+            ui.heading("Live LSL stream");
+            ui.horizontal(|ui| {
+                ui.label("Type");
+                ui.text_edit_singleline(&mut self.lsl_query);
+            });
+            ui.add(egui::Slider::new(&mut self.lsl_chunk_samples, 32..=2048).text("Chunk samples"));
+            ui.add(
+                egui::DragValue::new(&mut self.lsl_fs_hint)
+                    .range(1.0..=4000.0)
+                    .speed(1.0)
+                    .suffix(" Hz"),
+            );
+            let lsl_label = if self.store.is_lsl_streaming() {
+                "Stop LSL inlet"
+            } else {
+                "Start LSL inlet"
+            };
+            if ui.button(lsl_label).clicked() {
+                self.toggle_lsl_stream();
+            }
+            match self.store.lsl_status() {
+                LslStatus::Idle => {
+                    ui.label("LSL: idle");
+                }
+                LslStatus::Resolving { query } => {
+                    ui.label(format!("Resolving '{query}' ..."));
+                }
+                LslStatus::Connected {
+                    name,
+                    source_id,
+                    channels,
+                    fs,
+                    query,
+                } => {
+                    ui.label(format!("Connected to {name} ({source_id}) via '{query}'"));
+                    ui.label(format!("{channels} channels @ {:.1} Hz", fs));
+                }
+                LslStatus::Error(msg) => {
+                    ui.colored_label(egui::Color32::LIGHT_RED, format!("LSL error: {msg}"));
+                }
+            }
+
+            ui.separator();
+            ui.heading("Parquet recording");
+            let recording_status = self.store.recording_status().clone();
+            let recording_active = matches!(
+                recording_status,
+                RecordingStatus::Active { .. } | RecordingStatus::Starting { .. }
+            );
+            if ui
+                .add_enabled(
+                    !recording_active,
+                    egui::Button::new("Start Parquet recording"),
+                )
+                .clicked()
+            {
+                self.start_recording_dialog();
+            }
+            if ui
+                .add_enabled(recording_active, egui::Button::new("Stop recording"))
+                .clicked()
+            {
+                self.stop_recording();
+            }
+            match recording_status {
+                RecordingStatus::Idle => ui.label("Recorder idle"),
+                RecordingStatus::Starting { path } => {
+                    ui.label(format!("Starting recorder at {}", path.display()))
+                }
+                RecordingStatus::Active { path, samples } => ui.label(format!(
+                    "Recording {} samples → {}",
+                    samples,
+                    path.display()
+                )),
+                RecordingStatus::Error(msg) => {
+                    ui.colored_label(egui::Color32::LIGHT_RED, format!("Recorder error: {msg}"))
+                }
+            };
 
             ui.separator();
             if let Some(raw) = &self.raw_path {

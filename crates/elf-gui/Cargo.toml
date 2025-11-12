@@ -11,6 +11,11 @@ egui_plot = { workspace = true }
 elf-lib = { path = "../elf-lib" }
 rfd = "0.14"
 crossbeam-channel = "0.5"
+lsl = "0.1"
+arrow = { workspace = true, features = ["io_parquet"] }
+csv = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Enable Linux-specific Wayland/X11 features so winit picks the X11 backend at build time.

@@ -4,6 +4,8 @@ Here’s a practical, cross-platform plan that scales from “copy binaries” t
 
 # 1) Fast path: portable tarballs + tiny installer
 
+**New recording banner:** The GUI now surfaces the Parquet recorder state (Idle/Starting/Recording/Error) in the ECG controls. When you update installers or release notes, call this out so lab operators know to look at the left rail for “Parquet recording” before unplugging sensors.
+
 **Artifacts (per OS/arch)**
 
 * `elf-<version>-x86_64-apple-darwin.tar.xz` (contains `elf-cli`, `elf-gui`, `elf-run`, etc.)

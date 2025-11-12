@@ -6,6 +6,9 @@ members = [
 ]
 resolver = "2"
 
+[patch.crates-io]
+lsl-sys = { path = "vendor/lsl-sys" }
+
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -33,3 +36,4 @@ winit = { version = "0.30", default-features = false }
 toml = "0.7"
 tempfile = "3"
 rand = { version = "0.8", features = ["std"] }
+parquet = "22"
