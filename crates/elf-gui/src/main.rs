@@ -1,6 +1,6 @@
 use crossbeam_channel::{bounded, Sender};
 use eframe::{egui, egui::ViewportBuilder};
-use egui::ScrollArea;
+use egui::{Color32, Margin, ScrollArea};
 use egui_plot::{Line, Plot, VLine};
 use elf_lib::detectors::ecg::{run_beat_hrv_pipeline, EcgPipelineConfig};
 use elf_lib::io::{eeg as eeg_io, eye as eye_io, text as text_io, wfdb as wfdb_io};
@@ -531,6 +531,7 @@ impl ElfApp {
     fn show_hrv_tab(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("controls").show(ctx, |ui| {
             ui.heading("Controls");
+            ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
             let slider =
                 ui.add(egui::Slider::new(&mut self.fs, 50.0..=2000.0).text("Sampling freq (Hz)"));
             if slider.changed() {
@@ -588,7 +589,7 @@ impl ElfApp {
                 }
             }
 
-            ui.separator();
+            ui.add_space(6.0);
             ui.group(|ui| {
                 ui.heading("Live HRV snapshot");
                 if let Some(rr) = self.store.rr_series() {
@@ -791,6 +792,7 @@ impl ElfApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(12.0, 6.0);
             ScrollArea::vertical().show(ui, |ui| {
                 if self.store.ecg().is_none() {
                     ui.centered_and_justified(|ui| {
@@ -1301,6 +1303,17 @@ impl Drop for ElfApp {
 
 impl eframe::App for ElfApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.style_mut(|style| {
+            style.spacing.item_spacing = egui::vec2(14.0, 8.0);
+            style.spacing.button_padding = egui::vec2(14.0, 7.0);
+            style.spacing.window_margin = Margin::same(12.0);
+            let visuals = &mut style.visuals;
+            visuals.widgets.inactive.rounding = 8.0.into();
+            visuals.widgets.hovered.rounding = 8.0.into();
+            visuals.selection.bg_fill = Color32::from_rgb(90, 160, 255);
+            visuals.extreme_bg_color = Color32::from_rgb(18, 18, 24);
+            visuals.window_fill = Color32::from_rgb(24, 24, 32);
+        });
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.vertical(|ui| {
                 ui.heading("Extensible Lab Framework — Multimodal Viewer");
