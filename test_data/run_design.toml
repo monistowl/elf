@@ -1,0 +1,9 @@
+name = "stroop"
+
+[timing]
+isi_ms = 500.0
+response_deadline_ms = 1500.0
+
+[randomization]
+policy = "permute"
+seed = 42

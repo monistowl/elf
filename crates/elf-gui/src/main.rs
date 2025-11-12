@@ -47,9 +47,11 @@ impl GuiTab {
 }
 
 mod router;
+mod run_loader;
 mod store;
 
 use router::{StreamCommand, StreamingStateRouter};
+use run_loader::{events_from_times, load_events, load_manifest, RunManifest};
 use store::Store;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -182,6 +184,8 @@ struct ElfApp {
     eye_status: String,
     eye_layout: EyeLayout,
     stream_simulator: Option<StreamingSimulator>,
+    run_bundle_path: Option<String>,
+    run_manifest: Option<RunManifest>,
 }
 
 impl Default for ElfApp {
@@ -202,6 +206,8 @@ impl Default for ElfApp {
             eye_status: "No eye data".into(),
             eye_layout: EyeLayout::PupilLabs,
             stream_simulator: None,
+            run_bundle_path: None,
+            run_manifest: None,
         }
     }
 }
@@ -355,6 +361,22 @@ impl ElfApp {
         Ok(())
     }
 
+    fn try_load_run_bundle(&mut self, path: &Path) -> Result<(), String> {
+        let events_path = path.join("events.tsv");
+        let manifest_path = path.join("run.json");
+        let times =
+            load_events(&events_path).map_err(|e| format!("Run events load failed: {}", e))?;
+        let fs = self.store.ecg().map(|ts| ts.fs).unwrap_or(self.fs).max(1.0);
+        let events = events_from_times(&times, fs);
+        self.store.set_events(events);
+        let manifest = load_manifest(&manifest_path)
+            .map_err(|e| format!("Run manifest load failed: {}", e))?;
+        self.run_bundle_path = Some(path.display().to_string());
+        self.run_manifest = Some(manifest);
+        self.status = format!("Loaded run bundle from {}", path.display());
+        Ok(())
+    }
+
     fn apply_eye_filter(&mut self) {
         self.store.set_eye_threshold(self.eye_min_conf);
         self.eye_status = format!(
@@ -436,6 +458,33 @@ impl ElfApp {
                     ui.label("Annotations: ");
                     ui.monospace(ann);
                 });
+            }
+
+            ui.separator();
+            ui.heading("Run bundle");
+            if ui.button("Load run bundle").clicked() {
+                if let Some(path) = FileDialog::new().pick_folder() {
+                    if let Err(err) = self.try_load_run_bundle(&path) {
+                        self.status = err;
+                    }
+                }
+            }
+            if let Some(bundle) = &self.run_bundle_path {
+                ui.label(format!("Bundle: {}", bundle));
+            }
+            if let Some(manifest) = &self.run_manifest {
+                ui.label(format!("Task: {}", manifest.task));
+                ui.label(format!(
+                    "Trials: {} events: {}",
+                    manifest.total_trials, manifest.total_events
+                ));
+                ui.label(format!("ISI: {} ms", manifest.isi_ms));
+                if let Some(jitter) = manifest.isi_jitter_ms {
+                    ui.label(format!("Jitter: ±{:.1} ms", jitter));
+                }
+                if let Some(policy) = &manifest.randomization_policy {
+                    ui.label(format!("Randomization: {}", policy));
+                }
             }
 
             ui.separator();

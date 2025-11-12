@@ -1,18 +1,31 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use elf_lib::{
     detectors::ecg::{
         detect_r_peaks, run_beat_hrv_pipeline, BeatHrvPipelineResult, EcgPipelineConfig,
     },
-    io::{eeg as eeg_io, eye as eye_io, text as text_io, wfdb as wfdb_io},
-    metrics::hrv::{hrv_nonlinear, hrv_psd, hrv_time},
+    io::{
+        bitalino as bitalino_io, eeg as eeg_io, eye as eye_io, openbci as openbci_io,
+        text as text_io, wfdb as wfdb_io,
+    },
+    metrics::{
+        hrv::{hrv_nonlinear, hrv_psd, hrv_time},
+        sqi::evaluate_sqi,
+    },
     plot::{figure_from_rr, Figure, Series},
     signal::{Events, RRSeries, TimeSeries},
 };
 use plotters::prelude::*;
+use serde::Deserialize;
 use std::{
+    env,
+    fs::{self, File},
     io::{self, Read},
     path::{Path, PathBuf},
+};
+mod run;
+use run::{
+    read_design, read_trials, simulate_run, write_events_json, write_events_tsv, write_manifest,
 };
 
 #[derive(Parser)]
@@ -146,6 +159,51 @@ enum Commands {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Simulate a run from design + trial specs and emit events/manifest bundle
+    RunSimulate {
+        #[arg(long)]
+        design: PathBuf,
+        #[arg(long)]
+        trials: PathBuf,
+        #[arg(long, default_value = "01")]
+        sub: String,
+        #[arg(long, default_value = "01")]
+        ses: String,
+        #[arg(long, default_value = "01")]
+        run: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Load a BITalino / OpenSignals CSV and run the ECG HRV pipeline
+    Bitalino {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, default_value = "analog0")]
+        signal: String,
+        #[arg(long)]
+        fs: Option<f64>,
+    },
+    /// Load OpenBCI CSV and run the ECG HRV pipeline
+    OpenBci {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, default_value = "Ch1")]
+        channel: String,
+        #[arg(long)]
+        fs: Option<f64>,
+    },
+    /// Validate a dataset spec JSON against the computed HRV summaries
+    DatasetValidate {
+        #[arg(long)]
+        spec: PathBuf,
+    },
+    /// Compute signal quality indices (kurtosis, SNR, RR coefficient of variation)
+    Sqi {
+        #[arg(long)]
+        input: Option<PathBuf>,
+        #[arg(long, default_value_t = 250.0)]
+        fs: f64,
+    },
 }
 
 fn main() -> Result<()> {
@@ -209,6 +267,22 @@ fn main() -> Result<()> {
         Commands::HrvPsd { input, interp_fs } => cmd_hrv_psd(input.as_deref(), interp_fs)?,
         Commands::HrvNonlinear { input } => cmd_hrv_nonlinear(input.as_deref())?,
         Commands::HrvPlot { input, out } => cmd_hrv_plot(input.as_deref(), &out)?,
+        Commands::Bitalino { input, signal, fs } => {
+            cmd_bitalino_hrv(&input, &signal, fs.unwrap_or(0.0))?
+        }
+        Commands::OpenBci { input, channel, fs } => {
+            cmd_openbci_hrv(&input, &channel, fs.unwrap_or(0.0))?
+        }
+        Commands::DatasetValidate { spec } => cmd_dataset_validate(&spec)?,
+        Commands::Sqi { input, fs } => cmd_sqi(input.as_deref(), fs)?,
+        Commands::RunSimulate {
+            design,
+            trials,
+            sub,
+            ses,
+            run,
+            out,
+        } => cmd_run_simulate(&design, &trials, &sub, &ses, &run, &out)?,
     }
     Ok(())
 }
@@ -247,6 +321,338 @@ fn cmd_hrv_plot(input: Option<&Path>, out: &Path) -> Result<()> {
     let rr = rr_series_from_input(input)?;
     let fig = figure_from_rr(&rr);
     draw_plotters_figure(out, &fig)?;
+    Ok(())
+}
+
+fn cmd_bitalino_hrv(path: &Path, signal: &str, fs_override: f64) -> Result<()> {
+    let mut ts = bitalino_io::read_bitalino_csv(path, signal)?;
+    if fs_override > 0.0 {
+        ts.fs = fs_override;
+    }
+    let result = run_beat_hrv_pipeline(&ts, &EcgPipelineConfig::default());
+    println!("{}", serde_json::to_string(&result)?);
+    Ok(())
+}
+
+fn cmd_openbci_hrv(path: &Path, channel: &str, fs_override: f64) -> Result<()> {
+    let mut ts = openbci_io::read_openbci_csv(path, channel)?;
+    if fs_override > 0.0 {
+        ts.fs = fs_override;
+    }
+    let result = run_beat_hrv_pipeline(&ts, &EcgPipelineConfig::default());
+    println!("{}", serde_json::to_string(&result)?);
+    Ok(())
+}
+
+fn cmd_dataset_validate(spec_path: &Path) -> Result<()> {
+    let spec_file = File::open(spec_path)
+        .with_context(|| format!("failed to open spec {}", spec_path.display()))?;
+    let spec: DatasetSpec =
+        serde_json::from_reader(spec_file).context("failed to parse dataset spec")?;
+    let repo_root = workspace_root();
+    match spec {
+        DatasetSpec::Case(case) => {
+            validate_case(&case, &repo_root, &CaseDefaults::default())?;
+        }
+        DatasetSpec::Suite(suite) => {
+            let defaults = CaseDefaults {
+                fs: suite.fs,
+                interp_fs: suite.interp_fs,
+                tolerance: suite.tolerance,
+            };
+            for case in &suite.cases {
+                validate_case(case, &repo_root, &defaults)?;
+            }
+            println!(
+                "suite {} validated ({} cases)",
+                suite.name,
+                suite.cases.len()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DatasetSpec {
+    Suite(DatasetSuite),
+    Case(DatasetCase),
+}
+
+#[derive(Deserialize)]
+struct DatasetSuite {
+    name: String,
+    #[serde(default)]
+    fs: Option<f64>,
+    #[serde(default)]
+    interp_fs: Option<f64>,
+    #[serde(default)]
+    tolerance: Option<f64>,
+    cases: Vec<DatasetCase>,
+}
+
+#[derive(Default, Clone, Copy)]
+struct CaseDefaults {
+    fs: Option<f64>,
+    interp_fs: Option<f64>,
+    tolerance: Option<f64>,
+}
+
+#[derive(Deserialize, Clone)]
+struct DatasetCase {
+    name: String,
+    #[serde(default)]
+    input: Option<String>,
+    #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    fs: Option<f64>,
+    #[serde(default)]
+    interp_fs: Option<f64>,
+    #[serde(default)]
+    tolerance: Option<f64>,
+    #[serde(default)]
+    wfdb_header: Option<String>,
+    #[serde(default)]
+    wfdb_lead: Option<usize>,
+    #[serde(default)]
+    annotations: Option<String>,
+    #[serde(default)]
+    bids_events: Option<String>,
+    #[serde(default)]
+    bitalino_input: Option<String>,
+    #[serde(default)]
+    bitalino_signal: Option<String>,
+    #[serde(default)]
+    hrv_time: Option<HrvTimeSpec>,
+    #[serde(default)]
+    hrv_psd: Option<HrvPsdSpec>,
+}
+
+#[derive(Default, Deserialize, Clone)]
+struct HrvTimeSpec {
+    #[serde(default)]
+    tolerance: Option<f64>,
+    #[serde(default)]
+    avnn: Option<f64>,
+    #[serde(default)]
+    sdnn: Option<f64>,
+    #[serde(default)]
+    rmssd: Option<f64>,
+    #[serde(default)]
+    pnn50: Option<f64>,
+}
+
+#[derive(Default, Deserialize, Clone)]
+struct HrvPsdSpec {
+    #[serde(default)]
+    tolerance: Option<f64>,
+    #[serde(default)]
+    lf: Option<f64>,
+    #[serde(default)]
+    hf: Option<f64>,
+    #[serde(default)]
+    vlf: Option<f64>,
+    #[serde(default)]
+    lf_hf: Option<f64>,
+    #[serde(default)]
+    total_power: Option<f64>,
+}
+
+fn validate_case(case: &DatasetCase, repo_root: &Path, defaults: &CaseDefaults) -> Result<()> {
+    let tolerance = case.tolerance.or(defaults.tolerance).unwrap_or(0.5).abs();
+    let interp_fs = case.interp_fs.or(defaults.interp_fs).unwrap_or(4.0);
+    let rr = rr_series_from_case(case, repo_root, defaults)?;
+    if let Some(spec) = &case.hrv_time {
+        verify_time_metrics(&case.name, spec, &rr, tolerance)?;
+    }
+    if let Some(spec) = &case.hrv_psd {
+        verify_psd_metrics(&case.name, spec, &rr, interp_fs, tolerance)?;
+    }
+    println!("dataset {} validated", case.name);
+    Ok(())
+}
+
+fn rr_series_from_case(
+    case: &DatasetCase,
+    repo_root: &Path,
+    defaults: &CaseDefaults,
+) -> Result<RRSeries> {
+    if case.format.as_deref() == Some("rr") {
+        let input = case
+            .input
+            .as_ref()
+            .ok_or_else(|| anyhow!("dataset {} missing RR input path", case.name))?;
+        let path = resolve_path(repo_root, input);
+        let rr = text_io::read_f64_series(&path)?;
+        return Ok(RRSeries { rr });
+    }
+
+    let events_fs = case.fs.or(defaults.fs);
+    let annotation_path = case
+        .annotations
+        .as_ref()
+        .map(|value| resolve_path(repo_root, value));
+    let bids_events_path = case
+        .bids_events
+        .as_ref()
+        .map(|value| resolve_path(repo_root, value));
+    if annotation_path.is_some() || bids_events_path.is_some() {
+        let fs = events_fs.ok_or_else(|| {
+            anyhow!(
+                "dataset {} requires fs when providing event annotations",
+                case.name
+            )
+        })?;
+        if let Some(events) =
+            load_annotation_events(annotation_path.as_deref(), bids_events_path.as_deref(), fs)?
+        {
+            return Ok(RRSeries::from_events(&events, fs));
+        }
+        anyhow::bail!("dataset {} produced no events from annotations", case.name);
+    }
+
+    if let Some(bitalino_input) = &case.bitalino_input {
+        let signal = case.bitalino_signal.as_deref().unwrap_or("analog0");
+        let path = resolve_path(repo_root, bitalino_input);
+        let ts = bitalino_io::read_bitalino_csv(&path, signal)?;
+        let result = run_beat_hrv_pipeline(&ts, &EcgPipelineConfig::default());
+        return Ok(result.rr);
+    }
+
+    let ts = if let Some(header) = &case.wfdb_header {
+        let lead = case.wfdb_lead.unwrap_or(0);
+        let path = resolve_path(repo_root, header);
+        wfdb_io::load_wfdb_lead(&path, lead)?
+    } else {
+        let input = case
+            .input
+            .as_ref()
+            .ok_or_else(|| anyhow!("dataset {} missing time series input path", case.name))?;
+        let path = resolve_path(repo_root, input);
+        let data = text_io::read_f64_series(&path)?;
+        let fs = events_fs.ok_or_else(|| {
+            anyhow!(
+                "dataset {} requires fs when providing raw samples",
+                case.name
+            )
+        })?;
+        TimeSeries { fs, data }
+    };
+    let result = run_beat_hrv_pipeline(&ts, &EcgPipelineConfig::default());
+    Ok(result.rr)
+}
+
+fn verify_time_metrics(
+    dataset: &str,
+    spec: &HrvTimeSpec,
+    rr: &RRSeries,
+    tolerance: f64,
+) -> Result<()> {
+    let tol = spec.tolerance.unwrap_or(tolerance).abs();
+    let computed = hrv_time(rr);
+    if let Some(expected) = spec.avnn {
+        assert_within(dataset, "AVNN", expected, computed.avnn, tol)?;
+    }
+    if let Some(expected) = spec.sdnn {
+        assert_within(dataset, "SDNN", expected, computed.sdnn, tol)?;
+    }
+    if let Some(expected) = spec.rmssd {
+        assert_within(dataset, "RMSSD", expected, computed.rmssd, tol)?;
+    }
+    if let Some(expected) = spec.pnn50 {
+        assert_within(dataset, "pNN50", expected, computed.pnn50, tol)?;
+    }
+    Ok(())
+}
+
+fn verify_psd_metrics(
+    dataset: &str,
+    spec: &HrvPsdSpec,
+    rr: &RRSeries,
+    interp_fs: f64,
+    tolerance: f64,
+) -> Result<()> {
+    let tol = spec.tolerance.unwrap_or(tolerance).abs();
+    let computed = hrv_psd(rr, interp_fs);
+    if let Some(expected) = spec.lf {
+        assert_within(dataset, "LF", expected, computed.lf, tol)?;
+    }
+    if let Some(expected) = spec.hf {
+        assert_within(dataset, "HF", expected, computed.hf, tol)?;
+    }
+    if let Some(expected) = spec.vlf {
+        assert_within(dataset, "VLF", expected, computed.vlf, tol)?;
+    }
+    if let Some(expected) = spec.lf_hf {
+        assert_within(dataset, "LF/HF", expected, computed.lf_hf, tol)?;
+    }
+    if let Some(expected) = spec.total_power {
+        assert_within(dataset, "Total Power", expected, computed.total_power, tol)?;
+    }
+    Ok(())
+}
+
+fn assert_within(dataset: &str, label: &str, expected: f64, actual: f64, tol: f64) -> Result<()> {
+    if (actual - expected).abs() > tol {
+        anyhow::bail!(
+            "{} mismatch for {}: expected {}, got {}",
+            label,
+            dataset,
+            expected,
+            actual
+        );
+    }
+    Ok(())
+}
+
+fn resolve_path(repo_root: &Path, input: &str) -> PathBuf {
+    let path = Path::new(input);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        repo_root.join(path)
+    }
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+fn cmd_sqi(input: Option<&Path>, fs: f64) -> Result<()> {
+    let data = read_samples(input)?;
+    let ts = TimeSeries {
+        fs: fs.max(1.0),
+        data,
+    };
+    let events = detect_r_peaks(&ts, 0.3);
+    let rr = RRSeries::from_events(&events, ts.fs);
+    let sqi = evaluate_sqi(&ts, &rr);
+    println!("{}", serde_json::to_string(&sqi)?);
+    Ok(())
+}
+
+fn cmd_run_simulate(
+    design: &Path,
+    trials: &Path,
+    sub: &str,
+    ses: &str,
+    run_id: &str,
+    out: &Path,
+) -> Result<()> {
+    let design_spec = read_design(design)?;
+    let trial_specs = read_trials(trials)?;
+    let bundle = simulate_run(&design_spec, &trial_specs, sub, ses, run_id);
+    fs::create_dir_all(out)?;
+    write_events_tsv(&out.join("events.tsv"), &bundle.events)?;
+    write_events_json(&out.join("events.json"))?;
+    write_manifest(&out.join("run.json"), &bundle.manifest)?;
+    println!("run bundle written to {}", out.display());
     Ok(())
 }
 

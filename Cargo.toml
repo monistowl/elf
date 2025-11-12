@@ -30,3 +30,6 @@ plotters = "0.3"
 csv = "1"
 edf-reader = "0.6"
 winit = { version = "0.30", default-features = false }
+toml = "0.7"
+tempfile = "3"
+rand = { version = "0.8", features = ["std"] }

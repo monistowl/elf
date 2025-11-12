@@ -23,10 +23,12 @@ cargo run -p elf-gui
 The CLI now understands WFDB records. Point `--wfdb-header` at a `.hea` file, `--wfdb-lead` at the desired channel, and `--annotations` at the `.atr` or newline list to reuse the same detector/HRV pipeline when working with PhysioNet data.
 Support for EEG-like formats is also landing: use `--eeg-edf`/`--eeg-channel` to read EDF files, and pass `--bids-events` alongside your pipeline to convert BIDS `events.tsv` onsets into sample indices while reusing the shared HRV tooling.
 Use `elf-cli pupil-normalize` with any of the supported column presets (`pupil-labs` or `tobii`) to filter pupil exports by confidence and emit normalized JSON so downstream tools (e.g., blink/interpolation pipelines) can read them.
+The new `elf-cli run-simulate` command reads the TOML/CSV pair described in `STIMULUS_PRESENTER.md`, schedules each trial (with optional jitter/rand policy) into `events.tsv`/`events.json`, and writes a `run.json` manifest so GUI dashboards can load the same bundle.
 
 The GUI now includes controls for pointing at a raw ECG recording (newline-delimited samples) and an optional
 annotation file, or for invoking the built-in detector when only the raw waveform is available. Uploaded beats
 are embedded into the plot and HRV summary tiles are updated from the same `elf-lib` pipeline that powers the CLI.
+It can also load a run bundle directory (the `events.tsv`/`run.json` produced by `run-simulate`) so you can inspect dataset-level metadata, run times, and event jitter before rerunning detection.
 
 ## Next steps
 - Replace naive R-peak picker with proper pipeline (bandpass, diff, square, MWI, adaptive threshold).
