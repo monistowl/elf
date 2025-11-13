@@ -175,6 +175,168 @@ impl DocRegistry {
                 "Wraps elf-cli's `run-simulate` functionality via elf_run.",
             ),
             ToolDoc::new(
+                "list_devices",
+                "List connected acquisition hardware (LSL, audio triggers, etc.).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "filter": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "devices": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string" },
+                                    "name": { "type": "string" },
+                                    "type": { "type": "string" },
+                                    "channels": { "type": "integer", "minimum": 1 },
+                                    "sampling_rate": { "type": "number" },
+                                    "description": { "type": "string" }
+                                },
+                                "required": ["id", "name", "type", "channels"]
+                            }
+                        }
+                    },
+                    "required": ["devices"],
+                    "additionalProperties": false
+                }),
+                "`list_devices(filter=...)` lets operators inspect available streams.",
+            ),
+            ToolDoc::new(
+                "start_run",
+                "Arm (or dry-run) a stimulus session and produce bundle URIs.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "design": { "type": "string" },
+                        "trials": { "type": "string" },
+                        "sub": { "type": "string" },
+                        "ses": { "type": "string" },
+                        "run": { "type": "string" },
+                        "dry_run": { "type": "boolean" },
+                        "confirm": { "type": "boolean" },
+                        "devices": { "type": "array" }
+                    },
+                    "required": ["design", "trials"],
+                    "additionalProperties": false
+                }),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "bundle_id": { "type": "string" },
+                        "tmp_id": { "type": "string" },
+                        "resources": { "type": "object" },
+                        "status": { "type": "string" },
+                        "dry_run": { "type": "boolean" },
+                        "mode": { "type": "string" }
+                    },
+                    "required": ["bundle_id", "resources", "tmp_id"],
+                    "additionalProperties": false
+                }),
+                "`start_run` is the live instrument entry point; confirm=true launches it.",
+            ),
+            ToolDoc::new(
+                "tail_events",
+                "Stream recent events for a run (supports since/limit).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "run": { "type": "string" },
+                        "tmp_id": { "type": "string" },
+                        "since": { "type": "number" },
+                        "limit": { "type": "integer" }
+                    },
+                    "additionalProperties": false
+                }),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "source": { "type": "string" },
+                        "count": { "type": "integer" },
+                        "events": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "onset": { "type": "number" },
+                                    "duration": { "type": "number" },
+                                    "event_type": { "type": "string" },
+                                    "stim_id": { "type": "string" }
+                                },
+                                "required": ["onset", "event_type", "stim_id"]
+                            }
+                        }
+                    },
+                    "required": ["source", "events"],
+                    "additionalProperties": false
+                }),
+                "Great for operator dashboards that watch _stim_ events on-the-fly.",
+            ),
+            ToolDoc::new(
+                "derive_hrv",
+                "Compute simple HRV stats from bundled RR intervals.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "run": { "type": "string" },
+                        "tmp_id": { "type": "string" },
+                        "stream": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "stream": { "type": "string" },
+                        "rr_intervals": { "type": "array", "items": { "type": "number" } },
+                        "stats": { "type": "object" },
+                        "source": { "type": "string" }
+                    },
+                    "required": ["stream", "rr_intervals", "stats", "source"],
+                    "additionalProperties": false
+                }),
+                "Computes SDNN/RMSSD-like stats from stim event spacing.",
+            ),
+            ToolDoc::new(
+                "signal_preview",
+                "Fetch a downsampled slice of events for plotting.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "run": { "type": "string" },
+                        "tmp_id": { "type": "string" },
+                        "stream": { "type": "string" },
+                        "tmin": { "type": "number" },
+                        "tmax": { "type": "number" },
+                        "decimate": { "type": "integer" }
+                    },
+                    "additionalProperties": false
+                }),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "stream": { "type": "string" },
+                        "source": { "type": "string" },
+                        "tmin": { "type": "number" },
+                        "tmax": { "type": "number" },
+                        "decimate": { "type": "integer" },
+                        "events": {
+                            "type": "array",
+                            "items": { "type": "object" }
+                        }
+                    },
+                    "required": ["stream", "events", "source"],
+                    "additionalProperties": false
+                }),
+                "Useful for rendering quick signal plots or verifying device data.",
+            ),
+            ToolDoc::new(
                 "list_tools",
                 "Describe every registered MCP tool (with schemas).",
                 json!({ "type": "object", "properties": {}, "additionalProperties": false }),

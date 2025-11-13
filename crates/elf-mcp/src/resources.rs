@@ -95,14 +95,15 @@ impl ResourceResolver {
                 file_path = "events.tsv";
             }
 
-            let map = self.temp_paths.lock().unwrap();
-            if let Some(base_path) = map.get(id) {
-                let safe_path = Self::sanitize_relative(file_path)?;
-                let target = base_path.join(safe_path);
-                debug!("resolved {} -> {}", uri, target.display());
-                let data = fs::read(&target)
-                    .with_context(|| format!("reading resource {}", target.display()))?;
-                return Ok(Some(data));
+            if let Ok(map) = self.temp_paths.lock() {
+                if let Some(base_path) = map.get(id) {
+                    let safe_path = Self::sanitize_relative(file_path)?;
+                    let target = base_path.join(safe_path);
+                    debug!("resolved {} -> {}", uri, target.display());
+                    let data = fs::read(&target)
+                        .with_context(|| format!("reading resource {}", target.display()))?;
+                    return Ok(Some(data));
+                }
             }
         }
         Ok(None)
@@ -112,6 +113,13 @@ impl ResourceResolver {
         if let Ok(mut map) = self.temp_paths.lock() {
             map.insert(id.to_string(), path);
         }
+    }
+
+    pub fn temp_base_path(&self, id: &str) -> Option<PathBuf> {
+        self.temp_paths
+            .lock()
+            .ok()
+            .and_then(|map| map.get(id).cloned())
     }
 
     fn sanitize_relative(path: &str) -> Result<PathBuf> {

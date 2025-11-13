@@ -1376,6 +1376,7 @@ dependencies = [
  "anyhow",
  "base64 0.21.7",
  "clap",
+ "csv",
  "elf-run",
  "env_logger",
  "log",
