@@ -90,6 +90,29 @@ Parses the provided CSV/TSV, filters on `confidence`, and emits JSON per sample.
 
 ---
 
+## MCP & security overview
+
+`elf-mcp` now ships with the suite so agents or transport clients can hit your tooling over the Model Context Protocol. Run direct probes or start the stdio transport:
+
+```bash
+cargo run -p elf-mcp -- --transport stdio catalog-summary
+cargo run -p elf-mcp -- --transport stdio run-tool --name simulate_run --params '{"design":"test_data/run_design.toml","trials":"test_data/run_trials.csv"}'
+echo '{"id":"1","method":"list_bundles","params":{}}' | cargo run -p elf-mcp -- --transport stdio serve
+```
+
+Key/cert bundles live under `~/.config/elf-mcp/keys` (use `ELF_KEY_DIR` to override). Manage them with the integrated helper:
+
+```bash
+cargo run -p elf-mcp -- key list
+cargo run -p elf-mcp -- key generate --name operator --days 365
+cargo run -p elf-mcp -- key import --name operator --cert /tmp/operator.cert.pem --key /tmp/operator.key.pem
+cargo run -p elf-mcp -- key export --name operator --dest /tmp
+```
+
+The GUI now exposes a “Security” tab where you can refresh stored bundles, generate new PEM pairs, import existing cert/key files, and export bundles for transport clients that need TLS material.
+
+---
+
 ## GUI quick tour
 
 ```bash
