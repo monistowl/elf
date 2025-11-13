@@ -1,16 +1,19 @@
 use crate::{catalog::Catalog, docs::DocRegistry};
 use anyhow::{anyhow, Context, Result};
 use log::debug;
-use std::collections::HashMap;
-use std::fs;
-use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 /// Resolves read-only resources exposed to MCP clients.
 pub struct ResourceResolver {
     catalog: Catalog,
     bundles: HashMap<String, PathBuf>,
     docs: Arc<DocRegistry>,
+    temp_paths: Mutex<HashMap<String, PathBuf>>,
 }
 
 impl ResourceResolver {
@@ -24,10 +27,18 @@ impl ResourceResolver {
             catalog: catalog.clone(),
             bundles,
             docs,
+            temp_paths: Mutex::new(HashMap::new()),
         }
     }
 
     pub fn resolve(&self, uri: &str) -> Result<Resource> {
+        if let Some(data) = self.resolve_temp(uri)? {
+            return Ok(Resource {
+                uri: uri.to_string(),
+                data,
+            });
+        }
+
         if let Some(doc_data) = self.docs.resolve_uri(uri) {
             return Ok(Resource {
                 uri: uri.to_string(),
@@ -71,6 +82,36 @@ impl ResourceResolver {
             uri: uri.to_string(),
             data,
         })
+    }
+
+    fn resolve_temp(&self, uri: &str) -> Result<Option<Vec<u8>>> {
+        const TMP_PREFIX: &str = "elf://tmp/";
+        if let Some(remainder) = uri.strip_prefix(TMP_PREFIX) {
+            let (id, mut file_path) = remainder
+                .split_once('/')
+                .map(|(run, path)| (run, path))
+                .unwrap_or((remainder, "events.tsv"));
+            if file_path.trim().is_empty() {
+                file_path = "events.tsv";
+            }
+
+            let map = self.temp_paths.lock().unwrap();
+            if let Some(base_path) = map.get(id) {
+                let safe_path = Self::sanitize_relative(file_path)?;
+                let target = base_path.join(safe_path);
+                debug!("resolved {} -> {}", uri, target.display());
+                let data = fs::read(&target)
+                    .with_context(|| format!("reading resource {}", target.display()))?;
+                return Ok(Some(data));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn register_temp_bundle(&self, id: &str, path: PathBuf) {
+        if let Ok(mut map) = self.temp_paths.lock() {
+            map.insert(id.to_string(), path);
+        }
     }
 
     fn sanitize_relative(path: &str) -> Result<PathBuf> {

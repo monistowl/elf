@@ -1323,6 +1323,7 @@ dependencies = [
  "clap",
  "csv",
  "elf-lib",
+ "elf-run",
  "env_logger",
  "plotters",
  "rand",
@@ -1375,10 +1376,25 @@ dependencies = [
  "anyhow",
  "base64 0.21.7",
  "clap",
+ "elf-run",
  "env_logger",
  "log",
  "serde",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "elf-run"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "csv",
+ "rand",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]

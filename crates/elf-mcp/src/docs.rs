@@ -135,6 +135,46 @@ impl DocRegistry {
                 "Agents should use this for streaming data via elf:// URIs.",
             ),
             ToolDoc::new(
+                "simulate_run",
+                "Simulate a stimulus run from design + trial specs.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "design": { "type": "string" },
+                        "trials": { "type": "string" },
+                        "sub": { "type": "string" },
+                        "ses": { "type": "string" },
+                        "run": { "type": "string" }
+                    },
+                    "required": ["design", "trials"],
+                    "additionalProperties": false
+                }),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "bundle_id": { "type": "string" },
+                        "sub": { "type": "string" },
+                        "ses": { "type": "string" },
+                        "task": { "type": "string" },
+                        "design": { "type": "string" },
+                        "resources": {
+                            "type": "object",
+                            "properties": {
+                                "events": { "type": "string" },
+                                "manifest": { "type": "string" },
+                                "metadata": { "type": "string" }
+                            },
+                            "required": ["events", "manifest"]
+                        },
+                        "directory": { "type": "string" },
+                        "tmp_id": { "type": "string" }
+                    },
+                    "required": ["bundle_id", "resources", "tmp_id", "directory"],
+                    "additionalProperties": false
+                }),
+                "Wraps elf-cli's `run-simulate` functionality via elf_run.",
+            ),
+            ToolDoc::new(
                 "list_tools",
                 "Describe every registered MCP tool (with schemas).",
                 json!({ "type": "object", "properties": {}, "additionalProperties": false }),

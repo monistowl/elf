@@ -12,10 +12,11 @@ use elf_lib::{
         hrv::{hrv_nonlinear, hrv_psd, hrv_time, HRVPsd, HRVTime},
         sqi::evaluate_sqi,
     },
-    plot::{
-        figure_from_rr, Figure, Series,
-    },
+    plot::{figure_from_rr, Figure, Series},
     signal::{Events, RRSeries, TimeSeries},
+};
+use elf_run::{
+    read_design, read_trials, simulate_run, write_events_json, write_events_tsv, write_manifest,
 };
 use plotters::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -25,10 +26,6 @@ use std::{
     io::{self, Read},
     path::{Path, PathBuf},
     process::Command,
-};
-mod run;
-use run::{
-    read_design, read_trials, simulate_run, write_events_json, write_events_tsv, write_manifest,
 };
 fn ensure_run_bundle(repo_root: &Path) -> Result<()> {
     let bundle_dir = repo_root.join("test_data/run_bundle");

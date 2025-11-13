@@ -5,14 +5,28 @@ use crate::{
 };
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
+use elf_run::{
+    read_design, read_trials, simulate_run as simulate_bundle, write_events_json, write_events_tsv,
+    write_manifest,
+};
 use log::info;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::{
+    cell::RefCell,
+    path::Path,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
+use tempfile::TempDir;
 
 pub struct ToolRegistry<'a> {
     catalog: &'a Catalog,
     resolver: &'a ResourceResolver,
     docs: Arc<DocRegistry>,
+    temp_dirs: RefCell<Vec<TempDir>>,
+    temp_counter: AtomicUsize,
 }
 
 impl<'a> ToolRegistry<'a> {
@@ -25,6 +39,8 @@ impl<'a> ToolRegistry<'a> {
             catalog,
             resolver,
             docs,
+            temp_dirs: RefCell::new(Vec::new()),
+            temp_counter: AtomicUsize::new(0),
         }
     }
 
@@ -86,6 +102,45 @@ impl<'a> ToolRegistry<'a> {
                     "base64": general_purpose::STANDARD.encode(&resource.data),
                 }))
             }
+            "simulate_run" => {
+                let design_path = Self::require_param_str(&params, "design")?;
+                let trials_path = Self::require_param_str(&params, "trials")?;
+                let sub = Self::optional_param_str(&params, "sub").unwrap_or_else(|| "01".into());
+                let ses = Self::optional_param_str(&params, "ses").unwrap_or_else(|| "01".into());
+                let run_id =
+                    Self::optional_param_str(&params, "run").unwrap_or_else(|| "01".into());
+
+                let design = read_design(Path::new(&design_path))?;
+                let trials = read_trials(Path::new(&trials_path))?;
+                let bundle = simulate_bundle(&design, &trials, &sub, &ses, &run_id);
+
+                let temp_dir = TempDir::new()?;
+                let temp_path = temp_dir.path().to_path_buf();
+                write_events_tsv(&temp_path.join("events.tsv"), &bundle.events)?;
+                write_events_json(&temp_path.join("events.json"))?;
+                write_manifest(&temp_path.join("run.json"), &bundle.manifest)?;
+
+                let tmp_id = format!("tmp-{}", self.temp_counter.fetch_add(1, Ordering::SeqCst));
+                let dir_display = temp_path.to_string_lossy().into_owned();
+                self.temp_dirs.borrow_mut().push(temp_dir);
+                self.resolver
+                    .register_temp_bundle(&tmp_id, temp_path.clone());
+
+                Ok(json!({
+                    "bundle_id": bundle.manifest.run,
+                    "sub": bundle.manifest.sub,
+                    "ses": bundle.manifest.ses,
+                    "task": bundle.manifest.task,
+                    "design": bundle.manifest.design,
+                    "resources": {
+                        "events": format!("elf://tmp/{}/events.tsv", tmp_id),
+                        "manifest": format!("elf://tmp/{}/run.json", tmp_id),
+                        "metadata": format!("elf://tmp/{}/events.json", tmp_id),
+                    },
+                    "directory": dir_display,
+                    "tmp_id": tmp_id,
+                }))
+            }
             _ => Err(anyhow!("unsupported tool {}", tool)),
         }
     }
@@ -96,6 +151,13 @@ impl<'a> ToolRegistry<'a> {
             .and_then(|value| value.as_str())
             .map(|value| value.to_string())
             .ok_or_else(|| anyhow!("parameter '{}' is required", key))
+    }
+
+    fn optional_param_str(params: &Value, key: &str) -> Option<String> {
+        params
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string())
     }
 
     pub fn first_bundle(&self) -> Option<&BundleEntry> {
