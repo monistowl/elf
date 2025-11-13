@@ -8,8 +8,8 @@ use env_logger::Env;
 use log::info;
 
 use crate::{catalog::Catalog, resources::ResourceResolver, tools::ToolRegistry};
-use base64::{engine::general_purpose, Engine as _};
-use serde_json::Value;
+use serde_json::json;
+use std::{fs, path::PathBuf};
 
 #[derive(Parser)]
 #[command(author, version, about = "elf-mcp MCP sidecar", long_about = None)]
@@ -45,6 +45,15 @@ enum Command {
         /// Resource URI (elf://...)
         #[arg(long)]
         uri: String,
+    },
+    /// Invoke any registered tool by name (JSON params)
+    RunTool {
+        /// Tool identifier (e.g., catalog_index)
+        #[arg(long)]
+        name: String,
+        /// Optional JSON file for parameters
+        #[arg(long)]
+        params: Option<PathBuf>,
     },
 }
 
@@ -106,28 +115,34 @@ fn main() -> Result<()> {
     match command {
         Command::Probe => info!("Probe command finished"),
         Command::CatalogSummary => {
-            println!("{}", serde_json::to_string_pretty(&summary)?);
+            let response = registry.execute("catalog_index", None)?;
+            println!("{}", serde_json::to_string_pretty(&response)?);
         }
         Command::ListBundles => {
-            println!("{}", serde_json::to_string_pretty(&bundles)?);
+            let response = registry.execute("list_bundles", None)?;
+            println!("{}", serde_json::to_string_pretty(&response)?);
         }
         Command::BundleManifest { run } => {
-            let resource = registry.manifest_for_run(&run)?;
-            let manifest: Value = serde_json::from_slice(&resource.data)
-                .with_context(|| format!("parsing manifest for run {}", run))?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            let params = json!({ "run": run });
+            let response = registry.execute("bundle_manifest", Some(params))?;
+            println!("{}", serde_json::to_string_pretty(&response)?);
         }
         Command::OpenResource { uri } => {
-            let resource = registry.open_resource(&uri)?;
-            let encoded = general_purpose::STANDARD.encode(&resource.data);
-            println!(
-                "{}",
-                serde_json::json!({
-                    "uri": resource.uri,
-                    "bytes": resource.data.len(),
-                    "base64": encoded,
-                })
-            );
+            let params = json!({ "uri": uri });
+            let response = registry.execute("open_resource", Some(params))?;
+            println!("{}", serde_json::to_string_pretty(&response)?);
+        }
+        Command::RunTool { name, params } => {
+            let json_params = if let Some(path) = params {
+                let content = fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                serde_json::from_str(&content)
+                    .with_context(|| format!("parsing {}", path.display()))?
+            } else {
+                json!({})
+            };
+            let response = registry.execute(&name, Some(json_params))?;
+            println!("{}", serde_json::to_string_pretty(&response)?);
         }
     }
 
