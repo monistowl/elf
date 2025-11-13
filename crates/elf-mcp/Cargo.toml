@@ -1,0 +1,15 @@
+[package]
+name = "elf-mcp"
+version = "0.1.0"
+edition = "2021"
+authors = ["ELF Contributors"]
+license = "MIT OR Apache-2.0"
+description = "Model Context Protocol sidecar for ELF tooling"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

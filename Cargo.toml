@@ -3,6 +3,7 @@ members = [
     "crates/elf-lib",
     "crates/elf-cli",
     "crates/elf-gui",
+    "crates/elf-mcp",
 ]
 resolver = "2"
 
