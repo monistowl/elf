@@ -1,18 +1,20 @@
-use crate::catalog::Catalog;
+use crate::{catalog::Catalog, docs::DocRegistry};
 use anyhow::{anyhow, Context, Result};
 use log::debug;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 /// Resolves read-only resources exposed to MCP clients.
 pub struct ResourceResolver {
     catalog: Catalog,
     bundles: HashMap<String, PathBuf>,
+    docs: Arc<DocRegistry>,
 }
 
 impl ResourceResolver {
-    pub fn new(catalog: &Catalog) -> Self {
+    pub fn new(catalog: &Catalog, docs: Arc<DocRegistry>) -> Self {
         let bundles = catalog
             .bundles
             .iter()
@@ -21,10 +23,18 @@ impl ResourceResolver {
         Self {
             catalog: catalog.clone(),
             bundles,
+            docs,
         }
     }
 
     pub fn resolve(&self, uri: &str) -> Result<Resource> {
+        if let Some(doc_data) = self.docs.resolve_uri(uri) {
+            return Ok(Resource {
+                uri: uri.to_string(),
+                data: doc_data,
+            });
+        }
+
         if uri == "elf://catalog/index.json" {
             let payload = serde_json::to_vec_pretty(&self.catalog)?;
             return Ok(Resource {

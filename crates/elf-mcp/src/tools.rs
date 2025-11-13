@@ -1,20 +1,31 @@
 use crate::{
     catalog::{BundleEntry, Catalog},
+    docs::DocRegistry,
     resources::{Resource, ResourceResolver},
 };
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
 use log::info;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 pub struct ToolRegistry<'a> {
     catalog: &'a Catalog,
     resolver: &'a ResourceResolver,
+    docs: Arc<DocRegistry>,
 }
 
 impl<'a> ToolRegistry<'a> {
-    pub fn new(catalog: &'a Catalog, resolver: &'a ResourceResolver) -> Self {
-        Self { catalog, resolver }
+    pub fn new(
+        catalog: &'a Catalog,
+        resolver: &'a ResourceResolver,
+        docs: Arc<DocRegistry>,
+    ) -> Self {
+        Self {
+            catalog,
+            resolver,
+            docs,
+        }
     }
 
     pub fn supported_tools() -> &'static [&'static str] {
@@ -23,6 +34,7 @@ impl<'a> ToolRegistry<'a> {
             "list_bundles",
             "bundle_manifest",
             "open_resource",
+            "list_tools",
             "list_devices",
             "simulate_run",
             "start_run",
@@ -57,6 +69,7 @@ impl<'a> ToolRegistry<'a> {
         match tool {
             "catalog_index" => Ok(self.catalog_summary()),
             "list_bundles" => Ok(json!(self.list_bundles())),
+            "list_tools" => Ok(json!(self.docs.list())),
             "bundle_manifest" => {
                 let run = Self::require_param_str(&params, "run")?;
                 let resource = self.manifest_for_run(&run)?;

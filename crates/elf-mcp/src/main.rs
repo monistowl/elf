@@ -1,15 +1,19 @@
 mod catalog;
+mod docs;
 mod resources;
 mod tools;
+mod transport;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use env_logger::Env;
 use log::info;
-
-use crate::{catalog::Catalog, resources::ResourceResolver, tools::ToolRegistry};
 use serde_json::json;
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc};
+
+use crate::{
+    catalog::Catalog, docs::DocRegistry, resources::ResourceResolver, tools::ToolRegistry,
+};
 
 #[derive(Parser)]
 #[command(author, version, about = "elf-mcp MCP sidecar", long_about = None)]
@@ -55,6 +59,8 @@ enum Command {
         #[arg(long)]
         params: Option<PathBuf>,
     },
+    /// Serve MCP requests over the configured transport.
+    Serve,
 }
 
 fn main() -> Result<()> {
@@ -68,9 +74,10 @@ fn main() -> Result<()> {
         args.transport, args.log_level
     );
 
+    let doc_registry = Arc::new(DocRegistry::default());
     let catalog = Catalog::load()?;
-    let resolver = ResourceResolver::new(&catalog);
-    let registry = ToolRegistry::new(&catalog, &resolver);
+    let resolver = ResourceResolver::new(&catalog, doc_registry.clone());
+    let registry = ToolRegistry::new(&catalog, &resolver, doc_registry.clone());
 
     registry.log_summary();
 
@@ -143,6 +150,10 @@ fn main() -> Result<()> {
             };
             let response = registry.execute(&name, Some(json_params))?;
             println!("{}", serde_json::to_string_pretty(&response)?);
+        }
+        Command::Serve => {
+            info!("Starting MCP transport server ({})", args.transport);
+            transport::run(&registry, &args.transport)?;
         }
     }
 
