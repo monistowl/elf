@@ -1,4 +1,5 @@
 mod catalog;
+mod doc_types;
 mod docs;
 mod resources;
 mod tools;
@@ -124,9 +125,7 @@ fn main() -> Result<()> {
     registry.log_summary();
 
     let summary = registry.catalog_summary();
-    if let Some(count) = summary.get("count").and_then(|value| value.as_u64()) {
-        info!("Catalog summary reports {} bundle(s)", count);
-    }
+    info!("Catalog summary reports {} bundle(s)", summary.count);
 
     let bundles = registry.list_bundles();
     if !bundles.is_empty() {

@@ -19,3 +19,5 @@ tempfile = { workspace = true }
 csv = { workspace = true }
 elf-lib = { path = "../elf-lib" }
 elf-keys = { path = "../elf-keys" }
+schemars = { workspace = true }
+utoipa = { workspace = true }

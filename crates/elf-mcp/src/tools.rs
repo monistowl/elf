@@ -1,5 +1,13 @@
 use crate::{
     catalog::{BundleEntry, Catalog},
+    doc_types::{
+        BundleDescriptor, BundleManifestParams, CatalogIndexParams, CatalogIndexResult,
+        DeriveHrvParams, DeriveHrvResult, DeviceCatalog, DeviceDescriptor, EventRecord,
+        ListBundlesParams, ListBundlesResult, ListDevicesParams, ListToolsParams, ListToolsResult,
+        OpenResourceParams, OpenResourceResult, RunManifestDoc, SignalPreviewParams,
+        SignalPreviewResult, SimulateRunParams, SimulateRunResult, SimulatedBundleResources,
+        StartMode, StartRunParams, StartRunResult, TailEventsParams, TailEventsResult,
+    },
     docs::DocRegistry,
     resources::{Resource, ResourceResolver},
 };
@@ -15,7 +23,6 @@ use elf_run::{
     write_manifest,
 };
 use log::info;
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     cell::RefCell,
@@ -66,20 +73,32 @@ impl<'a> ToolRegistry<'a> {
         ]
     }
 
-    pub fn catalog_summary(&self) -> Value {
-        self.catalog.to_json()
+    pub fn catalog_summary(&self) -> CatalogIndexResult {
+        let bundles: Vec<BundleDescriptor> = self
+            .catalog
+            .bundles
+            .iter()
+            .map(BundleDescriptor::from)
+            .collect();
+        CatalogIndexResult {
+            count: bundles.len(),
+            bundles,
+        }
     }
 
     pub fn list_bundles(&self) -> Vec<BundleEntry> {
         self.catalog.bundles.clone()
     }
 
-    pub fn manifest_for_run(&self, run_id: &str) -> Result<Resource> {
+    pub fn manifest_for_run(&self, run_id: &str) -> Result<RunManifestDoc> {
         let bundle = self
             .catalog
             .by_run_id(run_id)
             .ok_or_else(|| anyhow!("bundle {} not found", run_id))?;
-        self.open_resource(&bundle.resource_uri("run.json"))
+        let resource = self.open_resource(&bundle.resource_uri("run.json"))?;
+        let manifest = serde_json::from_slice::<RunManifestDoc>(&resource.data)
+            .context("parsing manifest JSON")?;
+        Ok(manifest)
     }
 
     pub fn open_resource(&self, uri: &str) -> Result<Resource> {
@@ -89,196 +108,198 @@ impl<'a> ToolRegistry<'a> {
     pub fn execute(&self, tool: &str, params: Option<Value>) -> Result<Value> {
         let params = params.unwrap_or_else(|| json!({}));
         match tool {
-            "catalog_index" => Ok(self.catalog_summary()),
-            "list_bundles" => Ok(json!(self.list_bundles())),
-            "list_tools" => Ok(json!(self.docs.list())),
-            "list_devices" => Ok(Self::device_catalog()),
+            "catalog_index" => {
+                serde_json::from_value::<CatalogIndexParams>(params)?;
+                let summary = self.catalog_summary();
+                Ok(serde_json::to_value(summary)?)
+            }
+            "list_bundles" => {
+                serde_json::from_value::<ListBundlesParams>(params)?;
+                let bundles: ListBundlesResult = self
+                    .catalog
+                    .bundles
+                    .iter()
+                    .map(BundleDescriptor::from)
+                    .collect();
+                Ok(serde_json::to_value(bundles)?)
+            }
+            "list_tools" => {
+                serde_json::from_value::<ListToolsParams>(params)?;
+                let tools: ListToolsResult = self.docs.list();
+                Ok(serde_json::to_value(tools)?)
+            }
+            "list_devices" => {
+                serde_json::from_value::<ListDevicesParams>(params)?;
+                let catalog = Self::device_catalog();
+                Ok(serde_json::to_value(catalog)?)
+            }
             "bundle_manifest" => {
-                let run = Self::require_param_str(&params, "run")?;
-                let resource = self.manifest_for_run(&run)?;
-                let manifest: Value =
-                    serde_json::from_slice(&resource.data).context("parsing manifest JSON")?;
-                Ok(manifest)
+                let input: BundleManifestParams = serde_json::from_value(params)?;
+                let manifest = self.manifest_for_run(&input.run)?;
+                Ok(serde_json::to_value(manifest)?)
             }
             "open_resource" => {
-                let uri = Self::require_param_str(&params, "uri")?;
-                let resource = self.open_resource(&uri)?;
-                Ok(json!({
-                    "uri": resource.uri,
-                    "bytes": resource.data.len(),
-                    "base64": general_purpose::STANDARD.encode(&resource.data),
-                }))
+                let input: OpenResourceParams = serde_json::from_value(params)?;
+                let resource = self.open_resource(&input.uri)?;
+                let payload = OpenResourceResult {
+                    uri: resource.uri,
+                    bytes: resource.data.len(),
+                    base64: general_purpose::STANDARD.encode(&resource.data),
+                };
+                Ok(serde_json::to_value(payload)?)
             }
             "simulate_run" => {
-                let design_path = Self::require_param_str(&params, "design")?;
-                let trials_path = Self::require_param_str(&params, "trials")?;
-                let sub = Self::optional_param_str(&params, "sub").unwrap_or_else(|| "01".into());
-                let ses = Self::optional_param_str(&params, "ses").unwrap_or_else(|| "01".into());
-                let run_id =
-                    Self::optional_param_str(&params, "run").unwrap_or_else(|| "01".into());
-                self.materialize_bundle(&design_path, &trials_path, &sub, &ses, &run_id)
+                let input: SimulateRunParams = serde_json::from_value(params)?;
+                let (sub, ses, run_id) = Self::resolve_run_parts(
+                    input.sub.as_deref(),
+                    input.ses.as_deref(),
+                    input.run.as_deref(),
+                );
+                let result =
+                    self.materialize_bundle(&input.design, &input.trials, &sub, &ses, &run_id)?;
+                Ok(serde_json::to_value(result)?)
             }
             "start_run" => {
-                let design_path = Self::require_param_str(&params, "design")?;
-                let trials_path = Self::require_param_str(&params, "trials")?;
-                let sub = Self::optional_param_str(&params, "sub").unwrap_or_else(|| "01".into());
-                let ses = Self::optional_param_str(&params, "ses").unwrap_or_else(|| "01".into());
-                let run_id =
-                    Self::optional_param_str(&params, "run").unwrap_or_else(|| "01".into());
-                let dry_run = params
-                    .get("dry_run")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(true);
-                let confirm = params
-                    .get("confirm")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false);
-
-                if !dry_run && !confirm {
+                let input: StartRunParams = serde_json::from_value(params)?;
+                if !input.dry_run && !input.confirm {
                     return Err(anyhow!(
                         "start_run requires confirm=true when dry_run=false"
                     ));
                 }
-
-                let mut response =
-                    self.materialize_bundle(&design_path, &trials_path, &sub, &ses, &run_id)?;
-                if let Some(map) = response.as_object_mut() {
-                    map.insert("dry_run".to_string(), json!(dry_run));
-                    map.insert(
-                        "mode".to_string(),
-                        json!(if dry_run { "dry_run" } else { "live" }),
-                    );
-                    if let Some(devices) = params.get("devices") {
-                        map.insert("devices".to_string(), devices.clone());
-                    }
-                }
-                Ok(response)
+                let base = &input.base;
+                let (sub, ses, run_id) = Self::resolve_run_parts(
+                    base.sub.as_deref(),
+                    base.ses.as_deref(),
+                    base.run.as_deref(),
+                );
+                let bundle =
+                    self.materialize_bundle(&base.design, &base.trials, &sub, &ses, &run_id)?;
+                let mode = if input.dry_run {
+                    StartMode::DryRun
+                } else {
+                    StartMode::Live
+                };
+                let result = StartRunResult {
+                    bundle,
+                    dry_run: input.dry_run,
+                    mode,
+                    devices: input.devices.clone(),
+                };
+                Ok(serde_json::to_value(result)?)
             }
             "tail_events" => {
-                let since = params
-                    .get("since")
-                    .and_then(|value| value.as_f64())
-                    .unwrap_or(0.0);
-                let limit = params
-                    .get("limit")
-                    .and_then(|value| value.as_u64())
-                    .map(|v| v as usize)
-                    .unwrap_or(50);
-                let (events, resource_uri) = self.events_for_params(&params)?;
-                let preview: Vec<Value> = events
+                let input: TailEventsParams = serde_json::from_value(params)?;
+                let since = input.since.unwrap_or(0.0);
+                let limit = input.limit.unwrap_or(50);
+                let (events, resource_uri) =
+                    self.events_for_source(input.run.as_deref(), input.tmp_id.as_deref())?;
+                let preview: Vec<EventRecord> = events
                     .into_iter()
                     .filter(|event| event.onset >= since)
                     .take(limit)
-                    .map(|event| event.to_json())
                     .collect();
-                Ok(json!({
-                    "source": resource_uri,
-                    "count": preview.len(),
-                    "events": preview,
-                }))
+                let response = TailEventsResult {
+                    source: resource_uri,
+                    count: preview.len(),
+                    events: preview,
+                };
+                Ok(serde_json::to_value(response)?)
             }
             "derive_hrv" => {
-                let stream = Self::optional_param_str(&params, "stream").unwrap_or_else(|| {
-                    Self::optional_param_str(&params, "run").unwrap_or_else(|| "unknown".into())
-                });
-                let (events, resource_uri) = self.events_for_params(&params)?;
+                let input: DeriveHrvParams = serde_json::from_value(params)?;
+                let stream = input
+                    .stream
+                    .or_else(|| input.run.clone())
+                    .unwrap_or_else(|| "unknown".into());
+                let (events, resource_uri) =
+                    self.events_for_source(input.run.as_deref(), input.tmp_id.as_deref())?;
                 let rr_series = Self::rr_series_from_events(&events)?;
-                let time_stats = hrv_time(&rr_series);
-                let psd_stats = hrv_psd(&rr_series, 4.0);
-                let nl_stats = hrv_nonlinear(&rr_series);
-                Ok(json!({
-                    "stream": stream,
-                    "source": resource_uri,
-                    "rr_series": rr_series.rr,
-                    "hrv_time": time_stats,
-                    "hrv_psd": psd_stats,
-                    "hrv_nonlinear": nl_stats,
-                }))
+                let time_stats = hrv_time(&rr_series).into();
+                let psd_stats = hrv_psd(&rr_series, 4.0).into();
+                let nl_stats = hrv_nonlinear(&rr_series).into();
+                let response = DeriveHrvResult {
+                    stream,
+                    source: resource_uri,
+                    rr_series: rr_series.rr,
+                    hrv_time: time_stats,
+                    hrv_psd: psd_stats,
+                    hrv_nonlinear: nl_stats,
+                };
+                Ok(serde_json::to_value(response)?)
             }
             "signal_preview" => {
-                let stream = Self::optional_param_str(&params, "stream").unwrap_or_else(|| {
-                    Self::optional_param_str(&params, "run").unwrap_or_else(|| "events".into())
-                });
-                let tmin = params
-                    .get("tmin")
-                    .and_then(|value| value.as_f64())
-                    .unwrap_or(f64::MIN);
-                let tmax = params
-                    .get("tmax")
-                    .and_then(|value| value.as_f64())
-                    .unwrap_or(f64::MAX);
-                let decimate = params
-                    .get("decimate")
-                    .and_then(|value| value.as_u64())
-                    .map(|v| v as usize)
-                    .unwrap_or(1)
-                    .max(1);
-                let (events, resource_uri) = self.events_for_params(&params)?;
-                let preview: Vec<Value> = events
+                let input: SignalPreviewParams = serde_json::from_value(params)?;
+                let stream = input
+                    .stream
+                    .or_else(|| input.run.clone())
+                    .unwrap_or_else(|| "events".into());
+                let tmin = input.tmin.unwrap_or(f64::MIN);
+                let tmax = input.tmax.unwrap_or(f64::MAX);
+                let decimate = input.decimate.unwrap_or(1).max(1);
+                let (events, resource_uri) =
+                    self.events_for_source(input.run.as_deref(), input.tmp_id.as_deref())?;
+                let preview: Vec<EventRecord> = events
                     .into_iter()
                     .filter(|event| event.onset >= tmin && event.onset <= tmax)
                     .enumerate()
                     .filter(|(idx, _)| idx % decimate == 0)
-                    .map(|(_, event)| event.to_json())
+                    .map(|(_, event)| event)
                     .collect();
-                let annotations = params.get("annotations").cloned();
-                Ok(json!({
-                    "stream": stream,
-                    "source": resource_uri,
-                    "tmin": tmin,
-                    "tmax": tmax,
-                    "decimate": decimate,
-                    "events": preview,
-                    "annotations": annotations,
-                }))
+                let response = SignalPreviewResult {
+                    stream,
+                    source: resource_uri,
+                    tmin,
+                    tmax,
+                    decimate,
+                    events: preview,
+                    annotations: input.annotations.clone(),
+                };
+                Ok(serde_json::to_value(response)?)
             }
             _ => Err(anyhow!("unsupported tool {}", tool)),
         }
     }
 
-    fn require_param_str(params: &Value, key: &str) -> Result<String> {
-        params
-            .get(key)
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string())
-            .ok_or_else(|| anyhow!("parameter '{}' is required", key))
+    fn device_catalog() -> DeviceCatalog {
+        DeviceCatalog {
+            devices: vec![
+                DeviceDescriptor {
+                    id: "lsl:EEG-01".into(),
+                    name: "EEG Cap".into(),
+                    kind: "lsl".into(),
+                    channels: 64,
+                    sampling_rate: Some(500.0),
+                    description: Some("Standard EEG cap streamed over LSL".into()),
+                },
+                DeviceDescriptor {
+                    id: "lsl:ECG-01".into(),
+                    name: "ECG Lead".into(),
+                    kind: "lsl".into(),
+                    channels: 1,
+                    sampling_rate: Some(1000.0),
+                    description: Some("Single-lead ECG via Bitalino".into()),
+                },
+                DeviceDescriptor {
+                    id: "trigger:audio".into(),
+                    name: "Audio Trigger".into(),
+                    kind: "trigger".into(),
+                    channels: 1,
+                    sampling_rate: None,
+                    description: Some("OS-level audio trigger output".into()),
+                },
+            ],
+        }
     }
 
-    fn optional_param_str(params: &Value, key: &str) -> Option<String> {
-        params
-            .get(key)
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string())
-    }
-
-    fn device_catalog() -> Value {
-        json!({
-            "devices": [
-                {
-                    "id": "lsl:EEG-01",
-                    "name": "EEG Cap",
-                    "type": "lsl",
-                    "channels": 64,
-                    "sampling_rate": 500.0,
-                    "description": "Standard EEG cap streamed over LSL"
-                },
-                {
-                    "id": "lsl:ECG-01",
-                    "name": "ECG Lead",
-                    "type": "lsl",
-                    "channels": 1,
-                    "sampling_rate": 1000.0,
-                    "description": "Single-lead ECG via Bitalino"
-                },
-                {
-                    "id": "trigger:audio",
-                    "name": "Audio Trigger",
-                    "type": "trigger",
-                    "channels": 1,
-                    "description": "OS-level audio trigger output"
-                }
-            ]
-        })
+    fn resolve_run_parts(
+        sub: Option<&str>,
+        ses: Option<&str>,
+        run: Option<&str>,
+    ) -> (String, String, String) {
+        let sub = sub.unwrap_or("01").to_string();
+        let ses = ses.unwrap_or("01").to_string();
+        let run_id = run.unwrap_or("01").to_string();
+        (sub, ses, run_id)
     }
 
     fn materialize_bundle(
@@ -288,16 +309,17 @@ impl<'a> ToolRegistry<'a> {
         sub: &str,
         ses: &str,
         run_id: &str,
-    ) -> Result<Value> {
+    ) -> Result<SimulateRunResult> {
         let design = read_design(Path::new(design_path))?;
         let trials = read_trials(Path::new(trials_path))?;
-        let bundle = simulate_bundle(&design, &trials, sub, ses, run_id);
+        let elf_run::RunBundle { events, manifest } =
+            simulate_bundle(&design, &trials, sub, ses, run_id);
 
         let temp_dir = TempDir::new()?;
         let temp_path = temp_dir.path().to_path_buf();
-        write_events_tsv(&temp_path.join("events.tsv"), &bundle.events)?;
+        write_events_tsv(&temp_path.join("events.tsv"), &events)?;
         write_events_json(&temp_path.join("events.json"))?;
-        write_manifest(&temp_path.join("run.json"), &bundle.manifest)?;
+        write_manifest(&temp_path.join("run.json"), &manifest)?;
 
         let tmp_id = format!("tmp-{}", self.temp_counter.fetch_add(1, Ordering::SeqCst));
         let dir_display = temp_path.to_string_lossy().into_owned();
@@ -305,33 +327,48 @@ impl<'a> ToolRegistry<'a> {
         self.resolver
             .register_temp_bundle(&tmp_id, temp_path.clone());
 
-        Ok(json!({
-            "bundle_id": bundle.manifest.run,
-            "sub": bundle.manifest.sub,
-            "ses": bundle.manifest.ses,
-            "task": bundle.manifest.task,
-            "design": bundle.manifest.design,
-            "resources": {
-                "events": format!("elf://tmp/{}/events.tsv", tmp_id),
-                "manifest": format!("elf://tmp/{}/run.json", tmp_id),
-                "metadata": format!("elf://tmp/{}/events.json", tmp_id),
-            },
-            "directory": dir_display,
-            "tmp_id": tmp_id,
-        }))
+        let elf_run::RunManifest {
+            sub,
+            ses,
+            run,
+            task,
+            design,
+            ..
+        } = manifest;
+        let resources = SimulatedBundleResources {
+            events: format!("elf://tmp/{}/events.tsv", tmp_id),
+            manifest: format!("elf://tmp/{}/run.json", tmp_id),
+            metadata: format!("elf://tmp/{}/events.json", tmp_id),
+        };
+
+        Ok(SimulateRunResult {
+            bundle_id: run,
+            sub,
+            ses,
+            task,
+            design,
+            resources,
+            directory: dir_display,
+            tmp_id,
+        })
     }
 
-    fn events_for_params(&self, params: &Value) -> Result<(Vec<EventRecord>, String)> {
-        if let Some(tmp_id) = Self::optional_param_str(params, "tmp_id") {
+    fn events_for_source(
+        &self,
+        run: Option<&str>,
+        tmp_id: Option<&str>,
+    ) -> Result<(Vec<EventRecord>, String)> {
+        if let Some(tmp) = tmp_id {
             let base_path = self
                 .resolver
-                .temp_base_path(&tmp_id)
-                .ok_or_else(|| anyhow!("tmp bundle {} not registered", tmp_id))?;
+                .temp_base_path(tmp)
+                .ok_or_else(|| anyhow!("tmp bundle {} not registered", tmp))?;
             let events = Self::read_events_file(&base_path.join("events.tsv"))?;
-            return Ok((events, format!("elf://tmp/{}/events.tsv", tmp_id)));
+            return Ok((events, format!("elf://tmp/{}/events.tsv", tmp)));
         }
 
-        let run_id = Self::optional_param_str(params, "run")
+        let run_id = run
+            .map(|value| value.to_string())
             .or_else(|| self.first_bundle().map(|bundle| bundle.run_id.clone()))
             .ok_or_else(|| anyhow!("run or tmp_id parameter is required"))?;
         let bundle = self
@@ -386,36 +423,5 @@ impl<'a> ToolRegistry<'a> {
             );
         }
         info!("Resource resolver available: {:p}", self.resolver);
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct EventRecord {
-    onset: f64,
-    duration: f64,
-    trial: usize,
-    block: usize,
-    event_type: String,
-    stim_id: String,
-    condition: String,
-    resp_key: Option<String>,
-    resp_rt: Option<f64>,
-    value: Option<String>,
-}
-
-impl EventRecord {
-    fn to_json(&self) -> Value {
-        json!({
-            "onset": self.onset,
-            "duration": self.duration,
-            "trial": self.trial,
-            "block": self.block,
-            "event_type": self.event_type,
-            "stim_id": self.stim_id,
-            "condition": self.condition,
-            "resp_key": self.resp_key,
-            "resp_rt": self.resp_rt,
-            "value": self.value,
-        })
     }
 }

@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::{
     collections::HashSet,
     env, fs,
@@ -146,10 +145,6 @@ impl Catalog {
 
     pub fn by_run_id(&self, run_id: &str) -> Option<&BundleEntry> {
         self.bundles.iter().find(|bundle| bundle.run_id == run_id)
-    }
-
-    pub fn to_json(&self) -> Value {
-        serde_json::json!({ "bundles": self.bundles, "count": self.bundles.len() })
     }
 }
 

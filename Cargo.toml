@@ -41,3 +41,5 @@ toml = "0.7"
 tempfile = "3"
 rand = { version = "0.8", features = ["std"] }
 parquet = "22"
+schemars = { version = "0.8", features = ["derive"] }
+utoipa = "4"
