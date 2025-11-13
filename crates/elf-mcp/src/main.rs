@@ -27,14 +27,36 @@ fn main() -> Result<()> {
 
     info!(
         "Starting elf-mcp with transport={} and log_level={}",
-        args.transport,
-        args.log_level
+        args.transport, args.log_level
     );
 
     let catalog = Catalog::load()?;
-    let resolver = ResourceResolver::new();
+    let resolver = ResourceResolver::new(&catalog);
+    let registry = ToolRegistry::new(&catalog, &resolver);
 
-    if let Ok(resource) = resolver.resolve("elf://catalog/index.json") {
+    registry.log_summary();
+
+    let summary = registry.catalog_summary();
+    if let Some(count) = summary.get("count").and_then(|value| value.as_u64()) {
+        info!("Catalog summary reports {} bundle(s)", count);
+    }
+
+    let bundles = registry.list_bundles();
+    if !bundles.is_empty() {
+        let ids: Vec<_> = bundles.iter().map(|bundle| bundle.run_id.clone()).collect();
+        info!("Discovered bundle IDs: {:?}", ids);
+
+        if let Some(bundle) = bundles.first() {
+            if let Some(found) = catalog.by_run_id(&bundle.run_id) {
+                info!(
+                    "Verified bundle {} via catalog lookup (path={})",
+                    found.run_id, found.bundle_path
+                );
+            }
+        }
+    }
+
+    if let Ok(resource) = registry.open_resource("elf://catalog/index.json") {
         info!(
             "Catalog probe resource available: {} ({} bytes)",
             resource.uri,
@@ -42,9 +64,15 @@ fn main() -> Result<()> {
         );
     }
 
-    let registry = ToolRegistry::new(&catalog, &resolver);
-
-    registry.log_summary();
+    if let Some(bundle) = registry.first_bundle() {
+        if let Ok(resource) = registry.open_resource(&bundle.resource_uri("run.json")) {
+            info!(
+                "Manifest for bundle {} loaded ({} bytes)",
+                bundle.run_id,
+                resource.data.len()
+            );
+        }
+    }
 
     Ok(())
 }

@@ -1,5 +1,10 @@
-use crate::{catalog::Catalog, resources::ResourceResolver};
+use crate::{
+    catalog::{BundleEntry, Catalog},
+    resources::{Resource, ResourceResolver},
+};
+use anyhow::Result;
 use log::info;
+use serde_json::Value;
 
 pub struct ToolRegistry<'a> {
     catalog: &'a Catalog,
@@ -13,22 +18,44 @@ impl<'a> ToolRegistry<'a> {
 
     pub fn supported_tools() -> &'static [&'static str] {
         &[
+            "catalog_index",
+            "list_bundles",
+            "bundle_manifest",
+            "open_resource",
             "list_devices",
-            "validate_design",
             "simulate_run",
             "start_run",
             "tail_events",
-            "list_bundles",
-            "open_resource",
             "derive_hrv",
-            "bundle_manifest",
             "signal_preview",
         ]
+    }
+
+    pub fn catalog_summary(&self) -> Value {
+        self.catalog.to_json()
+    }
+
+    pub fn list_bundles(&self) -> Vec<BundleEntry> {
+        self.catalog.bundles.clone()
+    }
+
+    pub fn open_resource(&self, uri: &str) -> Result<Resource> {
+        self.resolver.resolve(uri)
+    }
+
+    pub fn first_bundle(&self) -> Option<&BundleEntry> {
+        self.catalog.first_bundle()
     }
 
     pub fn log_summary(&self) {
         info!("Registered tools: {:?}", Self::supported_tools());
         info!("Catalog entries: {}", self.catalog.bundles.len());
+        if let Some(bundle) = self.first_bundle() {
+            info!(
+                "First bundle {} ({} events) at {}",
+                bundle.run_id, bundle.total_events, bundle.bundle_path
+            );
+        }
         info!("Resource resolver available: {:p}", self.resolver);
     }
 }
