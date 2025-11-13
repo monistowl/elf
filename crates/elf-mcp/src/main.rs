@@ -6,6 +6,7 @@ mod transport;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use elf_keys;
 use env_logger::Env;
 use log::info;
 use serde_json::json;
@@ -61,6 +62,47 @@ enum Command {
     },
     /// Serve MCP requests over the configured transport.
     Serve,
+    /// Manage TLS key/cert material for secure transports.
+    Key {
+        #[command(subcommand)]
+        command: KeyCommand,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+enum KeyCommand {
+    /// List stored key/cert bundles
+    List,
+    /// Generate a new self-signed certificate
+    Generate {
+        /// Logical name for the key pair
+        #[arg(long)]
+        name: String,
+        /// Validity period in days
+        #[arg(long, default_value_t = 365)]
+        days: u16,
+    },
+    /// Import an existing certificate + key
+    Import {
+        /// Logical name to store the bundle under
+        #[arg(long)]
+        name: String,
+        /// Path to the certificate PEM
+        #[arg(long)]
+        cert: PathBuf,
+        /// Path to the private key PEM
+        #[arg(long)]
+        key: PathBuf,
+    },
+    /// Export a key bundle to the given directory
+    Export {
+        /// Name of the key bundle to export
+        #[arg(long)]
+        name: String,
+        /// Destination directory for the PEM files
+        #[arg(long)]
+        dest: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -155,6 +197,39 @@ fn main() -> Result<()> {
             info!("Starting MCP transport server ({})", args.transport);
             transport::run(&registry, &args.transport)?;
         }
+        Command::Key { command } => match command {
+            KeyCommand::List => {
+                let keys = elf_keys::list_keys()?;
+                println!("{}", serde_json::to_string_pretty(&keys)?);
+            }
+            KeyCommand::Generate { name, days } => {
+                let entry = elf_keys::generate_key(&name, days)?;
+                println!(
+                    "Generated key {} (cert={}, key={})",
+                    entry.name,
+                    entry.cert_path.display(),
+                    entry.key_path.display()
+                );
+            }
+            KeyCommand::Import { name, cert, key } => {
+                let entry = elf_keys::import_key(&name, &cert, &key)?;
+                println!(
+                    "Imported key {} (cert={}, key={})",
+                    entry.name,
+                    entry.cert_path.display(),
+                    entry.key_path.display()
+                );
+            }
+            KeyCommand::Export { name, dest } => {
+                let (cert_path, key_path) = elf_keys::export_key(&name, &dest)?;
+                println!(
+                    "Exported {} -> cert={}, key={}",
+                    name,
+                    cert_path.display(),
+                    key_path.display()
+                );
+            }
+        },
     }
 
     Ok(())

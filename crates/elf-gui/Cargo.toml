@@ -16,6 +16,7 @@ arrow = { workspace = true, features = ["io_parquet"] }
 csv = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+elf-keys = { path = "../elf-keys" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Enable Linux-specific Wayland/X11 features so winit picks the X11 backend at build time.

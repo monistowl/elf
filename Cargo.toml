@@ -5,6 +5,7 @@ members = [
     "crates/elf-gui",
     "crates/elf-mcp",
     "crates/elf-run",
+    "crates/elf-keys",
 ]
 resolver = "2"
 

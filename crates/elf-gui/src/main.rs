@@ -2,6 +2,7 @@ use crossbeam_channel::{bounded, Sender};
 use eframe::{egui, egui::ViewportBuilder};
 use egui::{Color32, Margin, ScrollArea};
 use egui_plot::{Line, Plot, VLine};
+use elf_keys::KeyEntry;
 use elf_lib::detectors::ecg::{run_beat_hrv_pipeline, EcgPipelineConfig};
 use elf_lib::io::{eeg as eeg_io, eye as eye_io, text as text_io, wfdb as wfdb_io};
 use elf_lib::plot::{Figure, Series, Style};
@@ -33,6 +34,7 @@ enum GuiTab {
     Hrv,
     Eeg,
     Eye,
+    Settings,
 }
 
 impl GuiTab {
@@ -42,11 +44,18 @@ impl GuiTab {
             GuiTab::Hrv => "ECG / HRV",
             GuiTab::Eeg => "EEG",
             GuiTab::Eye => "Eye",
+            GuiTab::Settings => "Security",
         }
     }
 
-    fn all() -> [GuiTab; 4] {
-        [GuiTab::Landing, GuiTab::Hrv, GuiTab::Eeg, GuiTab::Eye]
+    fn all() -> [GuiTab; 5] {
+        [
+            GuiTab::Landing,
+            GuiTab::Hrv,
+            GuiTab::Eeg,
+            GuiTab::Eye,
+            GuiTab::Settings,
+        ]
     }
 }
 
@@ -258,6 +267,14 @@ struct ElfApp {
     lsl_query: String,
     lsl_chunk_samples: usize,
     lsl_fs_hint: f64,
+    key_list: Vec<KeyEntry>,
+    keys_loaded: bool,
+    key_status: String,
+    key_name: String,
+    key_validity_days: u32,
+    import_name: String,
+    import_cert: Option<PathBuf>,
+    import_key: Option<PathBuf>,
 }
 
 impl Default for ElfApp {
@@ -287,6 +304,14 @@ impl Default for ElfApp {
             lsl_query: "ECG".into(),
             lsl_chunk_samples: 256,
             lsl_fs_hint: 250.0,
+            key_list: Vec::new(),
+            keys_loaded: false,
+            key_status: "Key manager idle".into(),
+            key_name: String::new(),
+            key_validity_days: 365,
+            import_name: String::new(),
+            import_cert: None,
+            import_key: None,
         }
     }
 }
@@ -1036,6 +1061,110 @@ impl ElfApp {
         });
     }
 
+    fn show_settings_tab(&mut self, ctx: &egui::Context) {
+        if !self.keys_loaded {
+            self.refresh_keys();
+            self.keys_loaded = true;
+        }
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Security & Key Management");
+            ui.horizontal(|ui| {
+                ui.label("Status:");
+                ui.label(&self.key_status);
+                if ui.button("Refresh").clicked() {
+                    self.refresh_keys();
+                    self.keys_loaded = true;
+                }
+            });
+            ui.separator();
+            ui.group(|ui| {
+                ui.heading("Generate a key/cert bundle");
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut self.key_name);
+                    ui.label("Validity days");
+                    ui.add(
+                        egui::DragValue::new(&mut self.key_validity_days)
+                            .range(1..=3650)
+                            .suffix("d"),
+                    );
+                });
+                if ui.button("Generate bundle").clicked() {
+                    self.generate_key_action();
+                }
+            });
+            ui.separator();
+            ui.group(|ui| {
+                ui.heading("Import existing bundle");
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut self.import_name);
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Choose certificate").clicked() {
+                        if let Some(path) =
+                            FileDialog::new().add_filter("PEM", &["pem"]).pick_file()
+                        {
+                            self.import_cert = Some(path);
+                        }
+                    }
+                    ui.label(
+                        self.import_cert
+                            .as_ref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "No certificate selected".into()),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Choose private key").clicked() {
+                        if let Some(path) =
+                            FileDialog::new().add_filter("PEM", &["pem"]).pick_file()
+                        {
+                            self.import_key = Some(path);
+                        }
+                    }
+                    ui.label(
+                        self.import_key
+                            .as_ref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "No key selected".into()),
+                    );
+                });
+                if ui.button("Import bundle").clicked() {
+                    self.import_key_action();
+                }
+            });
+            ui.separator();
+            ui.group(|ui| {
+                ui.heading("Stored bundles");
+                ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    egui::Grid::new("key_grid")
+                        .striped(true)
+                        .min_col_width(100.0)
+                        .show(ui, |ui| {
+                            ui.label("Name");
+                            ui.label("Created");
+                            ui.label("Actions");
+                            ui.end_row();
+                            for entry in self.key_list.clone() {
+                                ui.label(&entry.name);
+                                ui.label(entry.created.as_deref().unwrap_or("unknown"));
+                                if ui.button("Export").clicked() {
+                                    self.export_key_action(&entry.name);
+                                }
+                                ui.end_row();
+                                ui.label(
+                                    egui::RichText::new(entry.cert_path.display().to_string())
+                                        .small(),
+                                );
+                                ui.end_row();
+                            }
+                        });
+                });
+            });
+        });
+    }
+
     fn show_landing_tab(&mut self, ctx: &egui::Context) {
         self.poll_batch_results();
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -1172,6 +1301,99 @@ impl ElfApp {
                 }
             }
         });
+    }
+
+    fn refresh_keys(&mut self) {
+        match elf_keys::list_keys() {
+            Ok(keys) => {
+                self.key_list = keys;
+                self.key_status = format!("Loaded {} key bundle(s)", self.key_list.len());
+            }
+            Err(err) => {
+                self.key_list.clear();
+                self.key_status = format!("Key refresh failed: {}", err);
+            }
+        }
+    }
+
+    fn mark_keys_dirty(&mut self) {
+        self.keys_loaded = false;
+    }
+
+    fn generate_key_action(&mut self) {
+        let name = self.key_name.trim();
+        if name.is_empty() {
+            self.key_status = "Provide a name for the key bundle".into();
+            return;
+        }
+        let days = self.key_validity_days.min(u32::from(u16::MAX));
+        match elf_keys::generate_key(name, days as u16) {
+            Ok(entry) => {
+                self.key_status = format!("Generated key {}", entry.name);
+                self.mark_keys_dirty();
+            }
+            Err(err) => {
+                self.key_status = format!("Generate failed: {}", err);
+            }
+        }
+    }
+
+    fn import_key_action(&mut self) {
+        let name = self.import_name.trim();
+        if name.is_empty() {
+            self.key_status = "Provide a name before importing".into();
+            return;
+        }
+        let cert = match &self.import_cert {
+            Some(path) => path,
+            None => {
+                self.key_status = "Select a certificate to import".into();
+                return;
+            }
+        };
+        let key = match &self.import_key {
+            Some(path) => path,
+            None => {
+                self.key_status = "Select a private key to import".into();
+                return;
+            }
+        };
+        match elf_keys::import_key(name, cert, key) {
+            Ok(entry) => {
+                self.key_status = format!("Imported key {}", entry.name);
+                self.mark_keys_dirty();
+                self.clear_import_selection();
+            }
+            Err(err) => {
+                self.key_status = format!("Import failed: {}", err);
+            }
+        }
+    }
+
+    fn export_key_action(&mut self, name: &str) {
+        if let Some(dest) = FileDialog::new().pick_folder() {
+            match elf_keys::export_key(name, &dest) {
+                Ok((cert, key)) => {
+                    self.key_status = format!(
+                        "Exported {} -> cert={} key={}",
+                        name,
+                        cert.display(),
+                        key.display()
+                    );
+                }
+                Err(err) => {
+                    self.key_status = format!("Export failed: {}", err);
+                }
+            }
+        } else {
+            self.key_status = "Export cancelled".into();
+        }
+    }
+
+    fn clear_import_selection(&mut self) {
+        self.import_cert = None;
+        self.import_key = None;
+        self.import_name.clear();
     }
 
     fn start_batch_run(&mut self) {
@@ -1336,6 +1558,7 @@ impl eframe::App for ElfApp {
             GuiTab::Hrv => self.show_hrv_tab(ctx),
             GuiTab::Eeg => self.show_eeg_tab(ctx),
             GuiTab::Eye => self.show_eye_tab(ctx),
+            GuiTab::Settings => self.show_settings_tab(ctx),
         }
 
         egui::TopBottomPanel::bottom("bottom").show(ctx, |ui| {
@@ -1344,6 +1567,7 @@ impl eframe::App for ElfApp {
                 GuiTab::Hrv => ui.label("Ready to inspect ECGs and beat annotations."),
                 GuiTab::Eeg => ui.label("Ready to explore EEG traces and events."),
                 GuiTab::Eye => ui.label("Ready to explore eye-tracking data."),
+                GuiTab::Settings => ui.label("Manage TLS keys/certs for secure transports."),
             });
         });
     }
