@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 VERSION="${1:-latest}"
 PREFIX="${PREFIX:-$HOME/.local}"
 OPT="$PREFIX/opt/elf"
@@ -19,13 +22,33 @@ if [ "$VERSION" = "latest" ]; then
   VERSION=$(curl -fsSL "$BASE_URL/LATEST.txt")
 fi
 FILE="elf-${VERSION}-${ARCH}-${OS}.tar.xz"
-URL="$BASE_URL/$VERSION/$FILE"
-SHASUM_URL="$URL.sha256"
-
 TMP=$(mktemp --suffix="-$FILE")
-curl -fsSL "$URL" -o "$TMP"
-if curl -fsSL "$SHASUM_URL" >/tmp/elf-sha256.txt; then
-  EXPECTED=$(awk '{print $1}' /tmp/elf-sha256.txt)
+
+LOCAL_RELEASE_DIR="${LOCAL_RELEASE_DIR:-$REPO_ROOT/release}"
+LOCAL_TARBALL="$LOCAL_RELEASE_DIR/$FILE"
+LOCAL_SHA="$LOCAL_RELEASE_DIR/${FILE}.sha256"
+
+EXPECTED=""
+if [ -f "$LOCAL_TARBALL" ]; then
+  echo "Using local release artifact $LOCAL_TARBALL"
+  cp "$LOCAL_TARBALL" "$TMP"
+  if [ -f "$LOCAL_SHA" ]; then
+    EXPECTED=$(awk '{print $1}' "$LOCAL_SHA")
+  else
+    echo "Warning: local SHA256 file not found at $LOCAL_SHA; skipping hash validation"
+  fi
+else
+  URL="$BASE_URL/$VERSION/$FILE"
+  SHASUM_URL="$URL.sha256"
+  curl -fsSL "$URL" -o "$TMP"
+  SHASUM_TMP=$(mktemp)
+  if curl -fsSL "$SHASUM_URL" >"$SHASUM_TMP"; then
+    EXPECTED=$(awk '{print $1}' "$SHASUM_TMP")
+  fi
+  rm -f "$SHASUM_TMP"
+fi
+
+if [ -n "$EXPECTED" ]; then
   if command -v sha256sum >/dev/null; then
     COMPUTED=$(sha256sum "$TMP" | awk '{print $1}')
   elif command -v shasum >/dev/null; then
