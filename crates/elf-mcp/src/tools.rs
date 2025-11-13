@@ -6,6 +6,10 @@ use crate::{
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose, Engine as _};
 use csv::{ReaderBuilder, Trim};
+use elf_lib::{
+    metrics::hrv::{hrv_nonlinear, hrv_psd, hrv_time},
+    signal::RRSeries,
+};
 use elf_run::{
     read_design, read_trials, simulate_run as simulate_bundle, write_events_json, write_events_tsv,
     write_manifest,
@@ -178,13 +182,17 @@ impl<'a> ToolRegistry<'a> {
                     Self::optional_param_str(&params, "run").unwrap_or_else(|| "unknown".into())
                 });
                 let (events, resource_uri) = self.events_for_params(&params)?;
-                let rr_intervals = Self::stim_rr_intervals(&events);
-                let stats = Self::hrv_stats(&rr_intervals);
+                let rr_series = Self::rr_series_from_events(&events)?;
+                let time_stats = hrv_time(&rr_series);
+                let psd_stats = hrv_psd(&rr_series, 4.0);
+                let nl_stats = hrv_nonlinear(&rr_series);
                 Ok(json!({
                     "stream": stream,
-                    "rr_intervals": rr_intervals,
-                    "stats": stats,
                     "source": resource_uri,
+                    "rr_series": rr_series.rr,
+                    "hrv_time": time_stats,
+                    "hrv_psd": psd_stats,
+                    "hrv_nonlinear": nl_stats,
                 }))
             }
             "signal_preview" => {
@@ -213,6 +221,7 @@ impl<'a> ToolRegistry<'a> {
                     .filter(|(idx, _)| idx % decimate == 0)
                     .map(|(_, event)| event.to_json())
                     .collect();
+                let annotations = params.get("annotations").cloned();
                 Ok(json!({
                     "stream": stream,
                     "source": resource_uri,
@@ -220,6 +229,7 @@ impl<'a> ToolRegistry<'a> {
                     "tmax": tmax,
                     "decimate": decimate,
                     "events": preview,
+                    "annotations": annotations,
                 }))
             }
             _ => Err(anyhow!("unsupported tool {}", tool)),
@@ -345,49 +355,21 @@ impl<'a> ToolRegistry<'a> {
         Ok(events)
     }
 
-    fn stim_rr_intervals(events: &[EventRecord]) -> Vec<f64> {
+    fn rr_series_from_events(events: &[EventRecord]) -> Result<RRSeries> {
         let mut stim_onsets: Vec<f64> = events
             .iter()
             .filter(|event| event.event_type == "stim")
             .map(|event| event.onset)
             .collect();
         stim_onsets.dedup();
-        stim_onsets
+        if stim_onsets.len() < 2 {
+            anyhow::bail!("not enough stim events for HRV");
+        }
+        let rr: Vec<f64> = stim_onsets
             .windows(2)
             .map(|window| (window[1] - window[0]).max(0.0))
-            .collect()
-    }
-
-    fn hrv_stats(rr: &[f64]) -> Value {
-        if rr.is_empty() {
-            return json!({
-                "count": 0,
-                "mean_rr": null,
-                "sdnn": null,
-                "rmssd": null
-            });
-        }
-        let mean = rr.iter().sum::<f64>() / rr.len() as f64;
-        let sdnn =
-            (rr.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / rr.len() as f64).sqrt();
-        let mut rmssd_acc = 0.0;
-        let mut rmssd_count = 0;
-        for window in rr.windows(2) {
-            let diff = window[1] - window[0];
-            rmssd_acc += diff.powi(2);
-            rmssd_count += 1;
-        }
-        let rmssd = if rmssd_count == 0 {
-            0.0
-        } else {
-            (rmssd_acc / rmssd_count as f64).sqrt()
-        };
-        json!({
-            "count": rr.len(),
-            "mean_rr": mean,
-            "sdnn": sdnn,
-            "rmssd": rmssd,
-        })
+            .collect();
+        Ok(RRSeries { rr })
     }
 
     pub fn first_bundle(&self) -> Option<&BundleEntry> {

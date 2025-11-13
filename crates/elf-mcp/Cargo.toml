@@ -17,3 +17,4 @@ base64 = { workspace = true }
 elf-run = { path = "../elf-run" }
 tempfile = { workspace = true }
 csv = { workspace = true }
+elf-lib = { path = "../elf-lib" }

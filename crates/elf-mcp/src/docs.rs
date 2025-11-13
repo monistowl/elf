@@ -280,7 +280,7 @@ impl DocRegistry {
             ),
             ToolDoc::new(
                 "derive_hrv",
-                "Compute simple HRV stats from bundled RR intervals.",
+                "Compute HRV metrics (time/frequency/nonlinear) from bundle events.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -294,14 +294,19 @@ impl DocRegistry {
                     "type": "object",
                     "properties": {
                         "stream": { "type": "string" },
-                        "rr_intervals": { "type": "array", "items": { "type": "number" } },
-                        "stats": { "type": "object" },
-                        "source": { "type": "string" }
+                        "source": { "type": "string" },
+                        "rr_series": {
+                            "type": "array",
+                            "items": { "type": "number" }
+                        },
+                        "hrv_time": { "type": "object" },
+                        "hrv_psd": { "type": "object" },
+                        "hrv_nonlinear": { "type": "object" }
                     },
-                    "required": ["stream", "rr_intervals", "stats", "source"],
+                    "required": ["stream", "source", "rr_series", "hrv_time", "hrv_psd", "hrv_nonlinear"],
                     "additionalProperties": false
                 }),
-                "Computes SDNN/RMSSD-like stats from stim event spacing.",
+                "Calls the shared HRV metrics (time/frequency/nonlinear) over stim timing.",
             ),
             ToolDoc::new(
                 "signal_preview",
@@ -329,7 +334,8 @@ impl DocRegistry {
                         "events": {
                             "type": "array",
                             "items": { "type": "object" }
-                        }
+                        },
+                        "annotations": { "type": ["array", "null"] }
                     },
                     "required": ["stream", "events", "source"],
                     "additionalProperties": false

@@ -1377,6 +1377,7 @@ dependencies = [
  "base64 0.21.7",
  "clap",
  "csv",
+ "elf-lib",
  "elf-run",
  "env_logger",
  "log",
