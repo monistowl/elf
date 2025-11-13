@@ -2,12 +2,14 @@ mod catalog;
 mod resources;
 mod tools;
 
-use anyhow::Result;
-use clap::Parser;
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
 use env_logger::Env;
 use log::info;
 
 use crate::{catalog::Catalog, resources::ResourceResolver, tools::ToolRegistry};
+use base64::{engine::general_purpose, Engine as _};
+use serde_json::Value;
 
 #[derive(Parser)]
 #[command(author, version, about = "elf-mcp MCP sidecar", long_about = None)]
@@ -19,10 +21,37 @@ struct Cli {
     /// Transport to expose (stdio or websocket)
     #[arg(long, default_value = "stdio")]
     transport: String,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Clone)]
+enum Command {
+    /// Probe catalog state (default)
+    Probe,
+    /// Print catalog summary JSON
+    CatalogSummary,
+    /// List discovered bundles
+    ListBundles,
+    /// Dump a bundle manifest
+    BundleManifest {
+        /// Run ID to query
+        #[arg(long)]
+        run: String,
+    },
+    /// Read an arbitrary resource by URI
+    OpenResource {
+        /// Resource URI (elf://...)
+        #[arg(long)]
+        uri: String,
+    },
 }
 
 fn main() -> Result<()> {
-    let args = Cli::parse();
+    let mut args = Cli::parse();
+    let command = args.command.take().unwrap_or_else(|| Command::Probe);
+
     env_logger::Builder::from_env(Env::default().default_filter_or(&args.log_level)).init();
 
     info!(
@@ -70,6 +99,34 @@ fn main() -> Result<()> {
                 "Manifest for bundle {} loaded ({} bytes)",
                 bundle.run_id,
                 resource.data.len()
+            );
+        }
+    }
+
+    match command {
+        Command::Probe => info!("Probe command finished"),
+        Command::CatalogSummary => {
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
+        Command::ListBundles => {
+            println!("{}", serde_json::to_string_pretty(&bundles)?);
+        }
+        Command::BundleManifest { run } => {
+            let resource = registry.manifest_for_run(&run)?;
+            let manifest: Value = serde_json::from_slice(&resource.data)
+                .with_context(|| format!("parsing manifest for run {}", run))?;
+            println!("{}", serde_json::to_string_pretty(&manifest)?);
+        }
+        Command::OpenResource { uri } => {
+            let resource = registry.open_resource(&uri)?;
+            let encoded = general_purpose::STANDARD.encode(&resource.data);
+            println!(
+                "{}",
+                serde_json::json!({
+                    "uri": resource.uri,
+                    "bytes": resource.data.len(),
+                    "base64": encoded,
+                })
             );
         }
     }

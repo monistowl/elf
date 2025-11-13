@@ -2,7 +2,7 @@ use crate::{
     catalog::{BundleEntry, Catalog},
     resources::{Resource, ResourceResolver},
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use log::info;
 use serde_json::Value;
 
@@ -37,6 +37,14 @@ impl<'a> ToolRegistry<'a> {
 
     pub fn list_bundles(&self) -> Vec<BundleEntry> {
         self.catalog.bundles.clone()
+    }
+
+    pub fn manifest_for_run(&self, run_id: &str) -> Result<Resource> {
+        let bundle = self
+            .catalog
+            .by_run_id(run_id)
+            .ok_or_else(|| anyhow!("bundle {} not found", run_id))?;
+        self.open_resource(&bundle.resource_uri("run.json"))
     }
 
     pub fn open_resource(&self, uri: &str) -> Result<Resource> {
