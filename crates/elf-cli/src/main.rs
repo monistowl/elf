@@ -27,13 +27,14 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-fn ensure_run_bundle(repo_root: &Path) -> Result<()> {
+fn ensure_run_bundle(repo_root: &Path, fs: f64) -> Result<()> {
     let bundle_dir = repo_root.join("test_data/run_bundle");
     if bundle_dir.join("events.idx").exists() {
         return Ok(());
     }
     let script = repo_root.join("scripts/generate_run_bundle.sh");
     let status = Command::new(script)
+        .arg(fs.to_string())
         .current_dir(repo_root)
         .status()
         .context("running run bundle generator")?;
@@ -597,7 +598,7 @@ fn rr_series_from_case(
             .map(|p| p.components().any(|comp| comp.as_os_str() == "run_bundle"))
             .unwrap_or(false)
         {
-            ensure_run_bundle(repo_root)?;
+            ensure_run_bundle(repo_root, fs)?;
         }
         if let Some(events) =
             load_annotation_events(annotation_path.as_deref(), bids_events_path.as_deref(), fs)?
