@@ -20,6 +20,7 @@ use elf_run::{
 };
 use plotters::prelude::*;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
 use std::{
     env,
     fs::{self, File},
@@ -214,6 +215,8 @@ enum Commands {
         spec: PathBuf,
         #[arg(long)]
         json: Option<PathBuf>,
+        #[arg(long)]
+        update_spec: bool,
     },
     /// Compute signal quality indices (kurtosis, SNR, RR coefficient of variation)
     Sqi {
@@ -291,7 +294,11 @@ fn main() -> Result<()> {
         Commands::OpenBci { input, channel, fs } => {
             cmd_openbci_hrv(&input, &channel, fs.unwrap_or(0.0))?
         }
-        Commands::DatasetValidate { spec, json } => cmd_dataset_validate(&spec, json.as_deref())?,
+        Commands::DatasetValidate {
+            spec,
+            json,
+            update_spec,
+        } => cmd_dataset_validate(&spec, json.as_deref(), update_spec)?,
         Commands::Sqi { input, fs } => cmd_sqi(input.as_deref(), fs)?,
         Commands::RunSimulate {
             design,
@@ -362,33 +369,25 @@ fn cmd_openbci_hrv(path: &Path, channel: &str, fs_override: f64) -> Result<()> {
     Ok(())
 }
 
-fn cmd_dataset_validate(spec_path: &Path, json: Option<&Path>) -> Result<()> {
-    let spec_file = File::open(spec_path)
-        .with_context(|| format!("failed to open spec {}", spec_path.display()))?;
-    let spec: DatasetSpec =
-        serde_json::from_reader(spec_file).context("failed to parse dataset spec")?;
+fn cmd_dataset_validate(spec_path: &Path, json: Option<&Path>, update_spec: bool) -> Result<()> {
+    let (mut spec, mut spec_value) = load_dataset_spec(spec_path)?;
     let repo_root = workspace_root();
     let mut results = Vec::new();
-    match spec {
-        DatasetSpec::Case(case) => {
-            results.push(validate_case(&case, &repo_root, &CaseDefaults::default())?);
-        }
-        DatasetSpec::Suite(suite) => {
-            let defaults = CaseDefaults {
-                fs: suite.fs,
-                interp_fs: suite.interp_fs,
-                tolerance: suite.tolerance,
-            };
-            for case in &suite.cases {
-                results.push(validate_case(case, &repo_root, &defaults)?);
-            }
-            println!(
-                "suite {} validated ({} cases)",
-                suite.name,
-                suite.cases.len()
-            );
-        }
+    let mode = if update_spec {
+        DatasetValidatorMode::Update
+    } else {
+        DatasetValidatorMode::Validate
+    };
+
+    results = run_dataset_spec(&mut spec, &mut spec_value, &repo_root, mode)?;
+
+    if update_spec {
+        let file = File::create(spec_path)
+            .with_context(|| format!("failed to write spec {}", spec_path.display()))?;
+        serde_json::to_writer_pretty(file, &spec_value)?;
+        println!("dataset spec updated at {}", spec_path.display());
     }
+
     if let Some(path) = json {
         let file = File::create(path)
             .with_context(|| format!("failed to write report {}", path.display()))?;
@@ -398,6 +397,81 @@ fn cmd_dataset_validate(spec_path: &Path, json: Option<&Path>) -> Result<()> {
         println!("{}", serde_json::to_string(&results)?);
     }
     Ok(())
+}
+
+fn load_dataset_spec(spec_path: &Path) -> Result<(DatasetSpec, Value)> {
+    let spec_src = fs::read_to_string(spec_path)
+        .with_context(|| format!("failed to open spec {}", spec_path.display()))?;
+    let spec_value: Value =
+        serde_json::from_str(&spec_src).context("failed to parse dataset spec")?;
+    let spec: DatasetSpec =
+        serde_json::from_value(spec_value.clone()).context("failed to deserialize dataset spec")?;
+    Ok((spec, spec_value))
+}
+
+fn run_dataset_spec(
+    spec: &mut DatasetSpec,
+    spec_value: &mut Value,
+    repo_root: &Path,
+    mode: DatasetValidatorMode,
+) -> Result<Vec<DatasetResult>> {
+    let mut results = Vec::new();
+    match (spec, spec_value) {
+        (DatasetSpec::Case(case), value) => {
+            results.push(validate_case(
+                case,
+                if matches!(mode, DatasetValidatorMode::Update) {
+                    Some(value)
+                } else {
+                    None
+                },
+                repo_root,
+                &CaseDefaults::default(),
+                mode,
+            )?);
+        }
+        (DatasetSpec::Suite(suite), Value::Object(map)) => {
+            let defaults = CaseDefaults {
+                fs: suite.fs,
+                interp_fs: suite.interp_fs,
+                tolerance: suite.tolerance,
+            };
+            let cases_value = map
+                .get_mut("cases")
+                .and_then(|v| v.as_array_mut())
+                .ok_or_else(|| anyhow!("dataset suite {} missing cases array", suite.name))?;
+            if cases_value.len() != suite.cases.len() {
+                anyhow::bail!(
+                    "dataset suite {} cases count mismatch between spec and JSON",
+                    suite.name
+                );
+            }
+            for (case, case_value) in suite.cases.iter_mut().zip(cases_value.iter_mut()) {
+                results.push(validate_case(
+                    case,
+                    if matches!(mode, DatasetValidatorMode::Update) {
+                        Some(case_value)
+                    } else {
+                        None
+                    },
+                    repo_root,
+                    &defaults,
+                    mode,
+                )?);
+            }
+            println!(
+                "suite {} {} ({} cases)",
+                suite.name,
+                match mode {
+                    DatasetValidatorMode::Validate => "validated",
+                    DatasetValidatorMode::Update => "processed",
+                },
+                suite.cases.len()
+            );
+        }
+        _ => anyhow::bail!("dataset spec had unexpected shape"),
+    }
+    Ok(results)
 }
 
 #[derive(Deserialize)]
@@ -424,6 +498,12 @@ struct CaseDefaults {
     fs: Option<f64>,
     interp_fs: Option<f64>,
     tolerance: Option<f64>,
+}
+
+#[derive(Clone, Copy)]
+enum DatasetValidatorMode {
+    Validate,
+    Update,
 }
 
 #[derive(Serialize)]
@@ -519,47 +599,144 @@ struct HrvPsdSpec {
 }
 
 fn validate_case(
-    case: &DatasetCase,
+    case: &mut DatasetCase,
+    case_value: Option<&mut Value>,
     repo_root: &Path,
     defaults: &CaseDefaults,
+    mode: DatasetValidatorMode,
 ) -> Result<DatasetResult> {
     let tolerance = case.tolerance.or(defaults.tolerance).unwrap_or(0.5).abs();
     let interp_fs = case.interp_fs.or(defaults.interp_fs).unwrap_or(4.0);
     let rr = rr_series_from_case(case, repo_root, defaults)?;
     let time_metrics = hrv_time(&rr);
-    let time_record = if let Some(spec) = &case.hrv_time {
-        verify_time_metrics(&case.name, spec, &time_metrics, tolerance)?;
+    let time_tolerance = case
+        .hrv_time
+        .as_ref()
+        .and_then(|spec| spec.tolerance)
+        .unwrap_or(tolerance)
+        .abs();
+    let had_time_spec = case.hrv_time.is_some();
+    let time_record = if had_time_spec || matches!(mode, DatasetValidatorMode::Update) {
+        let time_spec = case.hrv_time.get_or_insert_with(HrvTimeSpec::default);
+        if matches!(mode, DatasetValidatorMode::Validate) && had_time_spec {
+            verify_time_metrics(&case.name, time_spec, &time_metrics, tolerance)?;
+        }
+        if matches!(mode, DatasetValidatorMode::Update) {
+            time_spec.tolerance = Some(time_tolerance);
+            time_spec.avnn = Some(time_metrics.avnn);
+            time_spec.sdnn = Some(time_metrics.sdnn);
+            time_spec.rmssd = Some(time_metrics.rmssd);
+            time_spec.pnn50 = Some(time_metrics.pnn50);
+        }
         Some(TimeMetricsRecord {
             avnn: time_metrics.avnn,
             sdnn: time_metrics.sdnn,
             rmssd: time_metrics.rmssd,
             pnn50: time_metrics.pnn50,
-            tolerance: spec.tolerance.unwrap_or(tolerance).abs(),
+            tolerance: time_tolerance,
         })
     } else {
         None
     };
     let psd_metrics = hrv_psd(&rr, interp_fs);
-    let psd_record = if let Some(spec) = &case.hrv_psd {
-        verify_psd_metrics(&case.name, spec, &psd_metrics, tolerance)?;
+    let psd_tolerance = case
+        .hrv_psd
+        .as_ref()
+        .and_then(|spec| spec.tolerance)
+        .unwrap_or(tolerance)
+        .abs();
+    let had_psd_spec = case.hrv_psd.is_some();
+    let psd_record = if had_psd_spec || matches!(mode, DatasetValidatorMode::Update) {
+        let psd_spec = case.hrv_psd.get_or_insert_with(HrvPsdSpec::default);
+        if matches!(mode, DatasetValidatorMode::Validate) && had_psd_spec {
+            verify_psd_metrics(&case.name, psd_spec, &psd_metrics, tolerance)?;
+        }
+        if matches!(mode, DatasetValidatorMode::Update) {
+            psd_spec.tolerance = Some(psd_tolerance);
+            psd_spec.lf = Some(psd_metrics.lf);
+            psd_spec.hf = Some(psd_metrics.hf);
+            psd_spec.vlf = Some(psd_metrics.vlf);
+            psd_spec.lf_hf = Some(psd_metrics.lf_hf);
+            psd_spec.total_power = Some(psd_metrics.total_power);
+        }
         Some(PsdMetricsRecord {
             lf: psd_metrics.lf,
             hf: psd_metrics.hf,
             vlf: psd_metrics.vlf,
             lf_hf: psd_metrics.lf_hf,
             total_power: psd_metrics.total_power,
-            tolerance: spec.tolerance.unwrap_or(tolerance).abs(),
+            tolerance: psd_tolerance,
         })
     } else {
         None
     };
-    println!("dataset {} validated", case.name);
+    if matches!(mode, DatasetValidatorMode::Update) {
+        if let Some(value) = case_value {
+            update_case_value(
+                value,
+                &time_metrics,
+                &psd_metrics,
+                time_tolerance,
+                psd_tolerance,
+            )?;
+        }
+    }
+    println!(
+        "dataset {} {}",
+        case.name,
+        match mode {
+            DatasetValidatorMode::Validate => "validated",
+            DatasetValidatorMode::Update => "updated",
+        }
+    );
     Ok(DatasetResult {
         name: case.name.clone(),
         status: "ok".into(),
         time: time_record,
         psd: psd_record,
     })
+}
+
+fn update_case_value(
+    case_value: &mut Value,
+    time_metrics: &HRVTime,
+    psd_metrics: &HRVPsd,
+    time_tolerance: f64,
+    psd_tolerance: f64,
+) -> Result<()> {
+    let map = case_value
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("dataset spec case is not an object"))?;
+    map.insert(
+        "hrv_time".into(),
+        build_hrv_time_value(time_tolerance, time_metrics),
+    );
+    map.insert(
+        "hrv_psd".into(),
+        build_hrv_psd_value(psd_tolerance, psd_metrics),
+    );
+    Ok(())
+}
+
+fn build_hrv_time_value(tolerance: f64, metrics: &HRVTime) -> Value {
+    let mut map = Map::new();
+    map.insert("tolerance".into(), json!(tolerance));
+    map.insert("avnn".into(), json!(metrics.avnn));
+    map.insert("sdnn".into(), json!(metrics.sdnn));
+    map.insert("rmssd".into(), json!(metrics.rmssd));
+    map.insert("pnn50".into(), json!(metrics.pnn50));
+    Value::Object(map)
+}
+
+fn build_hrv_psd_value(tolerance: f64, metrics: &HRVPsd) -> Value {
+    let mut map = Map::new();
+    map.insert("tolerance".into(), json!(tolerance));
+    map.insert("lf".into(), json!(metrics.lf));
+    map.insert("hf".into(), json!(metrics.hf));
+    map.insert("vlf".into(), json!(metrics.vlf));
+    map.insert("lf_hf".into(), json!(metrics.lf_hf));
+    map.insert("total_power".into(), json!(metrics.total_power));
+    Value::Object(map)
 }
 
 fn rr_series_from_case(

@@ -20,8 +20,9 @@ Use `cargo run -p elf-cli -- <command>` while developing, or build cargo release
    * `elf bitalino --input test_data/bitalino_sample.csv --signal analog0`
    * `elf open-bci --input test_data/openbci_sample.csv --channel Ch1`
 3. **Dataset validation**
-   * `elf dataset-validate --spec test_data/dataset_suite_core.json`
+   * `elf dataset-validate --spec test_data/dataset_suite_core.json [--update-spec]`
    * Optional `--json out.json` emits structured summaries per dataset case for CI/automation.
+   * Add `--update-spec` when you need to recompute fixture metrics and rewrite the spec file to match the new values.
 4. **Presenter bundles**
    * `elf run-simulate --design test_data/run_design.toml --trials test_data/run_trials.csv --out /tmp/run`
    * `scripts/generate_run_bundle.sh` reruns the same simulation so validators/release pipelines regenerate the fixture.
@@ -30,6 +31,10 @@ User GUI (`elf-gui`)
 --------------------
 - Multi-tab dashboard (Landing / ECG-HRV / EEG / Eye) that shares the router/store state with the CLI pipelines.
 - HRV tab: load raw ECG/WFDB, detect beats, stream synthetic ECG, start/stop Parquet recording, stream LSL devices, and view live SQIs + RR histograms + precomputed PSD/nonlinear metrics.
+- HRV tab: the Run bundle controls expose column-name fields (onset/event_type/duration/label) plus a comma-separated event-type filter so you can replay arbitrary bundles.
+- HRV tab PSD controls now expose an interpolation-frequency slider (default 4 Hz) so you can tweak the Welch PSD smoothing and recompute LF/HF/VLF summaries for the current RR events.
+- Live HRV snapshot shows RMSSD/SDNN/pNN50/LF/HF and now offers an "Export HRV snapshot" button to dump the computed metrics (and optionally RR/events) to JSON.
+- The snapshot JSON now tracks the run bundle manifest/filter metadata when available so you can replay the same stimulus context later.
 - EEG tab: import EDF channels + BIDS events, peek at event overlays.
 - Eye tab: load Pupil/Tobii CSV, adjust confidence thresholds, inspect pupil traces/metrics.
 - Shared `Store` caches Figures + dirty flags so only the active tab rebuilds plots.

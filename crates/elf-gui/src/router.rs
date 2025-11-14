@@ -33,6 +33,7 @@ pub struct LslStreamInfo {
 pub enum StreamCommand {
     ProcessEcg(TimeSeries),
     IngestEvents(Events, f64),
+    SetPsdInterpFs(f64),
     DiscoverLslStreams { query: String },
     StartRecording { path: PathBuf, fs: f64 },
     StopRecording,
@@ -277,6 +278,9 @@ struct RouterWorker {
     command_rx: Receiver<StreamCommand>,
     update_tx: Sender<StreamUpdate>,
     recorder: Option<ParquetRecorder>,
+    psd_interp_fs: f64,
+    last_events: Option<Events>,
+    last_fs: f64,
 }
 
 impl RouterWorker {
@@ -285,16 +289,19 @@ impl RouterWorker {
             command_rx,
             update_tx,
             recorder: None,
+            psd_interp_fs: 4.0,
+            last_events: None,
+            last_fs: 250.0,
         }
     }
 
     fn run(mut self) {
         while let Ok(command) = self.command_rx.recv() {
             match command {
-                StreamCommand::ProcessEcg(ts) => self.handle_ecg(ts),
-                StreamCommand::IngestEvents(events, fs) => {
-                    let _ = self.update_tx.send(StreamUpdate::Events(events.clone()));
-                    publish_metrics(&events, fs, &self.update_tx);
+                StreamCommand::ProcessEcg(ts) => self.handle_process_ecg(ts),
+                StreamCommand::IngestEvents(events, fs) => self.handle_ingest_events(events, fs),
+                StreamCommand::SetPsdInterpFs(interp_fs) => {
+                    self.handle_set_psd_interp_fs(interp_fs);
                 }
                 StreamCommand::DiscoverLslStreams { query } => {
                     self.discover_lsl_streams(&query);
@@ -348,11 +355,26 @@ impl RouterWorker {
         let _ = self.update_tx.send(StreamUpdate::Ecg(ts.clone()));
         let cfg = EcgPipelineConfig::default();
         let result = run_beat_hrv_pipeline(&ts, &cfg);
-        let _ = self
-            .update_tx
-            .send(StreamUpdate::Events(result.events.clone()));
-        publish_metrics(&result.events, result.fs, &self.update_tx);
+        let events = result.events.clone();
+        let _ = self.update_tx.send(StreamUpdate::Events(events.clone()));
+        publish_metrics(&events, result.fs, self.psd_interp_fs, &self.update_tx);
+        self.last_events = Some(events);
+        self.last_fs = result.fs;
         self.append_recording(&ts.data, ts.fs);
+    }
+
+    fn handle_ingest_events(&mut self, events: Events, fs: f64) {
+        let _ = self.update_tx.send(StreamUpdate::Events(events.clone()));
+        publish_metrics(&events, fs, self.psd_interp_fs, &self.update_tx);
+        self.last_events = Some(events);
+        self.last_fs = fs;
+    }
+
+    fn handle_set_psd_interp_fs(&mut self, interp_fs: f64) {
+        self.psd_interp_fs = interp_fs.max(0.1);
+        if let Some(events) = self.last_events.clone() {
+            publish_metrics(&events, self.last_fs, self.psd_interp_fs, &self.update_tx);
+        }
     }
 
     fn start_recording(&mut self, path: PathBuf, fs: f64) {
@@ -443,10 +465,10 @@ impl RouterWorker {
     }
 }
 
-fn publish_metrics(events: &Events, fs: f64, update_tx: &Sender<StreamUpdate>) {
+fn publish_metrics(events: &Events, fs: f64, psd_interp_fs: f64, update_tx: &Sender<StreamUpdate>) {
     let rr = RRSeries::from_events(events, fs);
     let hrv_time = hrv_time(&rr);
-    let hrv_psd = hrv_psd(&rr, 4.0);
+    let hrv_psd = hrv_psd(&rr, psd_interp_fs);
     let hrv_nonlinear = hrv_nonlinear(&rr);
     let _ = update_tx.send(StreamUpdate::Hrv {
         rr,

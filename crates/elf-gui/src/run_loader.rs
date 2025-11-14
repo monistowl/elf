@@ -6,8 +6,7 @@ use serde_json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RunManifest {
     pub task: String,
     pub design: String,
@@ -21,7 +20,7 @@ pub struct RunManifest {
 }
 
 /// Flexible filter when loading run bundle events.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RunEventFilter {
     pub onset_column: String,
     pub event_type_column: String,

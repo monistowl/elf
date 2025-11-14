@@ -1,4 +1,5 @@
 use crate::hrv_helpers::rr_histogram_figure;
+use crate::run_loader::{RunEventFilter, RunManifest};
 use crate::GuiTab;
 use elf_lib::{
     io::eye as eye_io,
@@ -9,6 +10,7 @@ use elf_lib::{
     plot::{decimate_points, figure_from_rr, Color, Figure, LineSeries, Series, Style},
     signal::{Events, RRSeries, TimeSeries},
 };
+use serde::Serialize;
 
 const MAX_WAVEFORM_POINTS: usize = 2048;
 const MAX_EEG_POINTS: usize = 2048;
@@ -79,6 +81,49 @@ pub struct Store {
     snapshot: Snapshot,
     dirty: DirtyFlags,
     eye_threshold: f32,
+    psd_interp_fs: f64,
+    run_bundle_state: Option<RunBundleState>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HrvSnapshot {
+    pub events: Option<Events>,
+    pub rr: Option<RRSeries>,
+    pub fs: Option<f64>,
+    pub hrv_time: Option<HRVTime>,
+    pub hrv_psd: Option<HRVPsd>,
+    pub hrv_nonlinear: Option<HRVNonlinear>,
+    pub psd_interp_fs: f64,
+    pub run_bundle_state: Option<RunBundleState>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RunBundleState {
+    manifest: RunManifest,
+    filter: RunEventFilter,
+    bundle_path: Option<String>,
+}
+
+impl RunBundleState {
+    pub fn new(manifest: RunManifest, filter: RunEventFilter, bundle_path: Option<String>) -> Self {
+        Self {
+            manifest,
+            filter,
+            bundle_path,
+        }
+    }
+
+    pub fn manifest(&self) -> &RunManifest {
+        &self.manifest
+    }
+
+    pub fn filter(&self) -> &RunEventFilter {
+        &self.filter
+    }
+
+    pub fn bundle_path(&self) -> Option<&str> {
+        self.bundle_path.as_deref()
+    }
 }
 
 impl Default for Store {
@@ -99,6 +144,8 @@ impl Default for Store {
                 eye: true,
             },
             eye_threshold: 0.5,
+            psd_interp_fs: 4.0,
+            run_bundle_state: None,
         }
     }
 }
@@ -250,6 +297,40 @@ impl Store {
         self.snapshot.psd_figure.as_ref()
     }
 
+    pub fn psd_interp_fs(&self) -> f64 {
+        self.psd_interp_fs
+    }
+
+    pub fn set_psd_interp_fs(&mut self, interp_fs: f64) {
+        if (self.psd_interp_fs - interp_fs).abs() < f64::EPSILON {
+            return;
+        }
+        self.psd_interp_fs = interp_fs;
+        self.dirty.psd = true;
+        self.dirty.psd_figure = true;
+    }
+
+    pub fn events(&self) -> Option<&Events> {
+        self.snapshot.events.as_ref()
+    }
+
+    pub fn hrv_snapshot(&self) -> HrvSnapshot {
+        HrvSnapshot {
+            events: self.snapshot.events.clone(),
+            rr: self.snapshot.rr.clone(),
+            fs: self.snapshot.ecg.as_ref().map(|ts| ts.fs),
+            hrv_time: self.snapshot.hrv_time.clone(),
+            hrv_psd: self.snapshot.hrv_psd.clone(),
+            hrv_nonlinear: self.snapshot.hrv_nonlinear.clone(),
+            psd_interp_fs: self.psd_interp_fs,
+            run_bundle_state: self.run_bundle_state.clone(),
+        }
+    }
+
+    pub fn set_run_bundle_state(&mut self, state: Option<RunBundleState>) {
+        self.run_bundle_state = state;
+    }
+
     pub fn eye_figure(&self) -> Option<&Figure> {
         self.snapshot.eye_figure.as_ref()
     }
@@ -348,7 +429,7 @@ impl Store {
             return;
         }
         if let Some(rr) = self.ensure_rr_series() {
-            self.snapshot.hrv_psd = Some(hrv_psd(rr, 4.0));
+            self.snapshot.hrv_psd = Some(hrv_psd(rr, self.psd_interp_fs));
         } else {
             self.snapshot.hrv_psd = None;
         }

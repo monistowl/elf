@@ -3,6 +3,9 @@
 
 `elf` is a Rust-native, local-first toolkit for acquiring, processing, and visualizing physiological signals. It bundles a portable DSP core (`elf-lib`), a CLI entrypoint (`elf`), an egui dashboard (`elf-gui`), and supporting tools for EEG/eye tracking and streaming adapters. The focus is on transparent HRV analytics, extensible importers (WFDB, EDF, BITalino, OpenBCI, CSV, BIDS), and consistent plotting/validation across CLI + GUI targets.
 
+### Documentation
+Generated Rust API/docs live under `target/doc/` after you run `cargo doc`. For quick browsing, open `target/doc/elf/index.html` (or `cargo doc --open`) to review the CLI/core reference, and check `target/doc/elf_gui/index.html` for the dashboard-level API once you build the workspace docs.
+
 ## User manual overview
 
 1. Install the suite with the provided installers or build from source.
@@ -75,7 +78,7 @@ elf -- beat-hrv-pipeline --fs 250 --input test_data/synthetic_recording_a.txt --
 Simulate TRIALS + DESIGN manifests to produce presentation-ready bundles. Supply `--design`, `--trials`, `--sub`, `--ses`, `--run`, and `--out`. The generated folder contains `events.tsv`, `events.json`, and `run.json` for GUI replay.
 
 ### `elf dataset-validate`
-Recomputes metrics from `test_data/dataset_suite_core.json` and compares them to stored tolerances. Add new fixtures plus expected metrics when you add datasets to keep CI reproducible.
+Recomputes metrics from `test_data/dataset_suite_core.json` and compares them to stored tolerances. Add new fixtures plus expected metrics when you add datasets to keep CI reproducible. Run the same command with `--update-spec` to recompute and rewrite the stored metrics whenever new fixtures or pipeline changes require refreshed tolerances.
 
 ### `elf pupil-normalize`
 Parses the provided CSV/TSV, filters on `confidence`, and emits JSON per sample. Use `--format {pupil-labs|tobii}` to pick column mappings and `--min-confidence` to drop noisy samples.
@@ -120,6 +123,13 @@ elf-gui
 ```
 
 The dashboard shares the same state/metrics as the CLI. Load ECG inputs, annotations, or run bundles in the HRV tab, and the shared `Store` ensures plots/figures stay in sync across controls. The new `Load run bundle` button points to a bundle directory (`events.tsv` + `run.json`), surfaces manifest stats (ISI, jitter, policy), and feeds the shared `Store` so CLI + GUI outputs look the same.
+
+The HRV tab also exposes a PSD interpolation slider (default 4 Hz) that lets you tweak the Welch PSD interpolation rate and immediately recompute the plotted LF/HF/VLF power for the beats or streamed events you already loaded.
+
+Run bundle loading now lets you override the TSV column names (onset/event_type/duration/label) and supply a comma-separated list of event types so you can load bundles that expose different column headers or event names without editing source code.
+
+The Live HRV snapshot panel now includes an "Export HRV snapshot" button so you can capture the current RR/PSD/time metrics as JSON for archiving or regression tests.
+The exported JSON now bundles the run manifest/filter metadata (if you loaded a bundle) so the exact stimulus context travels with the snapshot.
 
 ---
 

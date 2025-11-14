@@ -8,7 +8,9 @@ use elf_lib::io::{eeg as eeg_io, eye as eye_io, text as text_io, wfdb as wfdb_io
 use elf_lib::plot::{Figure, Series, Style};
 use elf_lib::signal::{Events, TimeSeries};
 use rfd::FileDialog;
+use serde_json;
 use std::env;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
@@ -71,7 +73,14 @@ use run_loader::{
     RunManifest,
 };
 use std::collections::HashMap;
-use store::Store;
+use std::path::PathBuf;
+use store::{RunBundleState, Store};
+
+enum HrvExportOutcome {
+    Exported(PathBuf),
+    Cancelled,
+    NoData,
+}
 
 #[derive(Copy, Clone, PartialEq)]
 enum EyeLayout {
@@ -249,6 +258,7 @@ struct ElfApp {
     raw_path: Option<String>,
     annotation_path: Option<String>,
     fs: f64,
+    psd_interp_fs: f64,
     status: String,
     active_tab: GuiTab,
     landing_batch: LandingBatch,
@@ -269,6 +279,10 @@ struct ElfApp {
     run_bundle_path: Option<String>,
     run_manifest: Option<RunManifest>,
     run_bundle_event_filter: String,
+    run_bundle_onset_column: String,
+    run_bundle_event_type_column: String,
+    run_bundle_duration_column: String,
+    run_bundle_label_column: String,
     run_bundle_event_records: Vec<RunEventRecord>,
     run_bundle_event_summary: String,
     lsl_query: String,
@@ -293,6 +307,7 @@ impl Default for ElfApp {
             raw_path: None,
             annotation_path: None,
             fs: 250.0,
+            psd_interp_fs: 4.0,
             status: "No recording loaded".into(),
             active_tab: GuiTab::Landing,
             landing_batch: LandingBatch::default(),
@@ -311,6 +326,10 @@ impl Default for ElfApp {
             run_bundle_path: None,
             run_manifest: None,
             run_bundle_event_filter: "stim".into(),
+            run_bundle_onset_column: "onset".into(),
+            run_bundle_event_type_column: "event_type".into(),
+            run_bundle_duration_column: "duration".into(),
+            run_bundle_label_column: "event_type".into(),
             run_bundle_event_records: Vec::new(),
             run_bundle_event_summary: String::new(),
             lsl_query: "ECG".into(),
@@ -576,6 +595,7 @@ impl ElfApp {
     fn try_load_run_bundle(&mut self, path: &Path) -> Result<(), String> {
         let events_path = path.join("events.tsv");
         let manifest_path = path.join("run.json");
+        self.store.set_run_bundle_state(None);
         let filter = self.build_run_event_filter();
         let records = load_events_with_filter(&events_path, &filter)
             .map_err(|e| format!("Run events load failed: {}", e))?;
@@ -589,6 +609,11 @@ impl ElfApp {
         self.update_run_event_summary();
         let manifest = load_manifest(&manifest_path)
             .map_err(|e| format!("Run manifest load failed: {}", e))?;
+        self.store.set_run_bundle_state(Some(RunBundleState::new(
+            manifest.clone(),
+            filter,
+            Some(path.display().to_string()),
+        )));
         self.run_bundle_path = Some(path.display().to_string());
         self.run_manifest = Some(manifest);
         self.status = format!(
@@ -599,7 +624,39 @@ impl ElfApp {
         Ok(())
     }
 
+    fn export_hrv_snapshot(&mut self) -> Result<HrvExportOutcome, String> {
+        let snapshot = self.store.hrv_snapshot();
+        if snapshot.rr.is_none() && snapshot.events.is_none() {
+            return Ok(HrvExportOutcome::NoData);
+        }
+        if let Some(path) = FileDialog::new()
+            .add_filter("JSON", &["json"])
+            .set_file_name("hrv_snapshot.json")
+            .save_file()
+        {
+            let file = File::create(&path).map_err(|e| e.to_string())?;
+            serde_json::to_writer_pretty(file, &snapshot).map_err(|e| e.to_string())?;
+            return Ok(HrvExportOutcome::Exported(path));
+        }
+        Ok(HrvExportOutcome::Cancelled)
+    }
+
     fn build_run_event_filter(&self) -> RunEventFilter {
+        let mut filter = RunEventFilter::default();
+        filter.onset_column = self.run_bundle_onset_column.clone();
+        filter.event_type_column = self.run_bundle_event_type_column.clone();
+        let duration = self.run_bundle_duration_column.trim();
+        filter.duration_column = if duration.is_empty() {
+            None
+        } else {
+            Some(duration.to_string())
+        };
+        let label = self.run_bundle_label_column.trim();
+        filter.label_column = if label.is_empty() {
+            None
+        } else {
+            Some(label.to_string())
+        };
         let types: Vec<String> = self
             .run_bundle_event_filter
             .split(',')
@@ -608,10 +665,11 @@ impl ElfApp {
             .map(|segment| segment.to_string())
             .collect();
         if types.is_empty() {
-            RunEventFilter::allow_all()
+            filter.allowed_event_types.clear();
         } else {
-            RunEventFilter::with_allowed_types(types)
+            filter.allowed_event_types = types;
         }
+        filter
     }
 
     fn update_run_event_summary(&mut self) {
@@ -661,6 +719,22 @@ impl ElfApp {
                 ui.add(egui::Slider::new(&mut self.fs, 50.0..=2000.0).text("Sampling freq (Hz)"));
             if slider.changed() {
                 self.status = format!("Sampling frequency set to {:.1} Hz", self.fs);
+            }
+
+            let psd_slider = ui.add(
+                egui::Slider::new(&mut self.psd_interp_fs, 2.0..=64.0).text("PSD interp fs (Hz)"),
+            );
+            if psd_slider.changed() {
+                self.store.set_psd_interp_fs(self.psd_interp_fs);
+                let _ = self
+                    .store
+                    .command_sender()
+                    .send(StreamCommand::SetPsdInterpFs(self.psd_interp_fs));
+                if let Some(events) = self.store.events() {
+                    let fs = self.store.ecg().map(|ts| ts.fs).unwrap_or(self.fs).max(1.0);
+                    self.store.submit_events(events.clone(), fs);
+                }
+                self.status = format!("PSD interpolation set to {:.1} Hz", self.psd_interp_fs);
             }
 
             if ui.button("Load raw ECG").clicked() {
@@ -737,6 +811,27 @@ impl ElfApp {
                     });
                 } else {
                     ui.label("Waiting for RR events to compute live stats...");
+                }
+                let can_export_hrv =
+                    self.store.rr_series().is_some() || self.store.events().is_some();
+                if ui
+                    .add_enabled(can_export_hrv, egui::Button::new("Export HRV snapshot"))
+                    .clicked()
+                {
+                    match self.export_hrv_snapshot() {
+                        Ok(HrvExportOutcome::Exported(path)) => {
+                            self.status = format!("Exported HRV snapshot to {}", path.display());
+                        }
+                        Ok(HrvExportOutcome::Cancelled) => {
+                            self.status = "Export cancelled".into();
+                        }
+                        Ok(HrvExportOutcome::NoData) => {
+                            self.status = "No RR data available".into();
+                        }
+                        Err(err) => {
+                            self.status = format!("Export failed: {err}");
+                        }
+                    }
                 }
             });
 
@@ -930,6 +1025,23 @@ impl ElfApp {
 
             ui.separator();
             ui.heading("Run bundle");
+            ui.label("Run bundle TSV column names (leave blank to ignore optional fields).");
+            ui.horizontal(|ui| {
+                ui.label("Onset column");
+                ui.text_edit_singleline(&mut self.run_bundle_onset_column);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Event type column");
+                ui.text_edit_singleline(&mut self.run_bundle_event_type_column);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Duration column");
+                ui.text_edit_singleline(&mut self.run_bundle_duration_column);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Label column");
+                ui.text_edit_singleline(&mut self.run_bundle_label_column);
+            });
             ui.horizontal(|ui| {
                 ui.label("Event types");
                 ui.text_edit_singleline(&mut self.run_bundle_event_filter);
