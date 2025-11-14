@@ -378,7 +378,7 @@ fn cmd_dataset_validate(spec_path: &Path, json: Option<&Path>, update_spec: bool
         DatasetValidatorMode::Validate
     };
 
-    let results = run_dataset_spec(&mut spec, &mut spec_value, &repo_root, mode)?;
+    let report = run_dataset_spec(&mut spec, &mut spec_value, &repo_root, mode)?;
 
     if update_spec {
         let file = File::create(spec_path)
@@ -387,13 +387,38 @@ fn cmd_dataset_validate(spec_path: &Path, json: Option<&Path>, update_spec: bool
         println!("dataset spec updated at {}", spec_path.display());
     }
 
+    for case in &report.cases {
+        println!("{}", case.message);
+    }
+    if let Some(suite_summary) = &report.suite {
+        println!(
+            "suite {} {} ({} cases)",
+            suite_summary.name, suite_summary.status, suite_summary.cases
+        );
+    }
     if let Some(path) = json {
         let file = File::create(path)
             .with_context(|| format!("failed to write report {}", path.display()))?;
-        serde_json::to_writer_pretty(file, &results)?;
+        serde_json::to_writer_pretty(
+            file,
+            &report
+                .cases
+                .iter()
+                .map(|entry| &entry.result)
+                .collect::<Vec<_>>(),
+        )?;
         println!("dataset report written to {}", path.display());
     } else {
-        println!("{}", serde_json::to_string(&results)?);
+        println!(
+            "{}",
+            serde_json::to_string(
+                &report
+                    .cases
+                    .iter()
+                    .map(|entry| &entry.result)
+                    .collect::<Vec<_>>()
+            )?
+        );
     }
     Ok(())
 }
@@ -413,21 +438,23 @@ fn run_dataset_spec(
     spec_value: &mut Value,
     repo_root: &Path,
     mode: DatasetValidatorMode,
-) -> Result<Vec<DatasetResult>> {
-    let mut results = Vec::new();
+) -> Result<DatasetReport> {
+    let mut report = DatasetReport::default();
     match (spec, spec_value) {
         (DatasetSpec::Case(case), value) => {
-            results.push(validate_case(
-                case,
-                if matches!(mode, DatasetValidatorMode::Update) {
-                    Some(value)
-                } else {
-                    None
-                },
-                repo_root,
-                &CaseDefaults::default(),
-                mode,
-            )?);
+            let result = validate_case(case, repo_root, &CaseDefaults::default(), mode)?;
+            if matches!(mode, DatasetValidatorMode::Update) {
+                update_case_value(value, result.time.as_ref(), result.psd.as_ref())?;
+            }
+            let message = format!(
+                "dataset {} {}",
+                case.name,
+                match mode {
+                    DatasetValidatorMode::Validate => "validated",
+                    DatasetValidatorMode::Update => "updated",
+                }
+            );
+            report.cases.push(DatasetCaseReport { result, message });
         }
         (DatasetSpec::Suite(suite), Value::Object(map)) => {
             let defaults = CaseDefaults {
@@ -446,31 +473,49 @@ fn run_dataset_spec(
                 );
             }
             for (case, case_value) in suite.cases.iter_mut().zip(cases_value.iter_mut()) {
-                results.push(validate_case(
-                    case,
-                    if matches!(mode, DatasetValidatorMode::Update) {
-                        Some(case_value)
-                    } else {
-                        None
-                    },
-                    repo_root,
-                    &defaults,
-                    mode,
-                )?);
+                let result = validate_case(case, repo_root, &defaults, mode)?;
+                if matches!(mode, DatasetValidatorMode::Update) {
+                    update_case_value(case_value, result.time.as_ref(), result.psd.as_ref())?;
+                }
+                let message = format!(
+                    "dataset {} {}",
+                    case.name,
+                    match mode {
+                        DatasetValidatorMode::Validate => "validated",
+                        DatasetValidatorMode::Update => "updated",
+                    }
+                );
+                report.cases.push(DatasetCaseReport { result, message });
             }
-            println!(
-                "suite {} {} ({} cases)",
-                suite.name,
-                match mode {
-                    DatasetValidatorMode::Validate => "validated",
-                    DatasetValidatorMode::Update => "processed",
+            report.suite = Some(DatasetSuiteSummary {
+                name: suite.name.clone(),
+                cases: suite.cases.len(),
+                status: match mode {
+                    DatasetValidatorMode::Validate => "validated".into(),
+                    DatasetValidatorMode::Update => "processed".into(),
                 },
-                suite.cases.len()
-            );
+            });
         }
         _ => anyhow::bail!("dataset spec had unexpected shape"),
     }
-    Ok(results)
+    Ok(report)
+}
+
+#[derive(Default)]
+struct DatasetReport {
+    cases: Vec<DatasetCaseReport>,
+    suite: Option<DatasetSuiteSummary>,
+}
+
+struct DatasetCaseReport {
+    result: DatasetResult,
+    message: String,
+}
+
+struct DatasetSuiteSummary {
+    name: String,
+    cases: usize,
+    status: String,
 }
 
 #[derive(Deserialize)]
@@ -599,7 +644,6 @@ struct HrvPsdSpec {
 
 fn validate_case(
     case: &mut DatasetCase,
-    case_value: Option<&mut Value>,
     repo_root: &Path,
     defaults: &CaseDefaults,
     mode: DatasetValidatorMode,
@@ -669,17 +713,6 @@ fn validate_case(
     } else {
         None
     };
-    if matches!(mode, DatasetValidatorMode::Update) {
-        if let Some(value) = case_value {
-            update_case_value(
-                value,
-                &time_metrics,
-                &psd_metrics,
-                time_tolerance,
-                psd_tolerance,
-            )?;
-        }
-    }
     println!(
         "dataset {} {}",
         case.name,
@@ -698,43 +731,39 @@ fn validate_case(
 
 fn update_case_value(
     case_value: &mut Value,
-    time_metrics: &HRVTime,
-    psd_metrics: &HRVPsd,
-    time_tolerance: f64,
-    psd_tolerance: f64,
+    time_record: Option<&TimeMetricsRecord>,
+    psd_record: Option<&PsdMetricsRecord>,
 ) -> Result<()> {
     let map = case_value
         .as_object_mut()
         .ok_or_else(|| anyhow!("dataset spec case is not an object"))?;
-    map.insert(
-        "hrv_time".into(),
-        build_hrv_time_value(time_tolerance, time_metrics),
-    );
-    map.insert(
-        "hrv_psd".into(),
-        build_hrv_psd_value(psd_tolerance, psd_metrics),
-    );
+    if let Some(record) = time_record {
+        map.insert("hrv_time".into(), build_hrv_time_value(record));
+    }
+    if let Some(record) = psd_record {
+        map.insert("hrv_psd".into(), build_hrv_psd_value(record));
+    }
     Ok(())
 }
 
-fn build_hrv_time_value(tolerance: f64, metrics: &HRVTime) -> Value {
+fn build_hrv_time_value(record: &TimeMetricsRecord) -> Value {
     let mut map = Map::new();
-    map.insert("tolerance".into(), json!(tolerance));
-    map.insert("avnn".into(), json!(metrics.avnn));
-    map.insert("sdnn".into(), json!(metrics.sdnn));
-    map.insert("rmssd".into(), json!(metrics.rmssd));
-    map.insert("pnn50".into(), json!(metrics.pnn50));
+    map.insert("tolerance".into(), json!(record.tolerance));
+    map.insert("avnn".into(), json!(record.avnn));
+    map.insert("sdnn".into(), json!(record.sdnn));
+    map.insert("rmssd".into(), json!(record.rmssd));
+    map.insert("pnn50".into(), json!(record.pnn50));
     Value::Object(map)
 }
 
-fn build_hrv_psd_value(tolerance: f64, metrics: &HRVPsd) -> Value {
+fn build_hrv_psd_value(record: &PsdMetricsRecord) -> Value {
     let mut map = Map::new();
-    map.insert("tolerance".into(), json!(tolerance));
-    map.insert("lf".into(), json!(metrics.lf));
-    map.insert("hf".into(), json!(metrics.hf));
-    map.insert("vlf".into(), json!(metrics.vlf));
-    map.insert("lf_hf".into(), json!(metrics.lf_hf));
-    map.insert("total_power".into(), json!(metrics.total_power));
+    map.insert("tolerance".into(), json!(record.tolerance));
+    map.insert("lf".into(), json!(record.lf));
+    map.insert("hf".into(), json!(record.hf));
+    map.insert("vlf".into(), json!(record.vlf));
+    map.insert("lf_hf".into(), json!(record.lf_hf));
+    map.insert("total_power".into(), json!(record.total_power));
     Value::Object(map)
 }
 
