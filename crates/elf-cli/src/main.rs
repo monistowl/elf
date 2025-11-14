@@ -372,14 +372,13 @@ fn cmd_openbci_hrv(path: &Path, channel: &str, fs_override: f64) -> Result<()> {
 fn cmd_dataset_validate(spec_path: &Path, json: Option<&Path>, update_spec: bool) -> Result<()> {
     let (mut spec, mut spec_value) = load_dataset_spec(spec_path)?;
     let repo_root = workspace_root();
-    let mut results = Vec::new();
     let mode = if update_spec {
         DatasetValidatorMode::Update
     } else {
         DatasetValidatorMode::Validate
     };
 
-    results = run_dataset_spec(&mut spec, &mut spec_value, &repo_root, mode)?;
+    let results = run_dataset_spec(&mut spec, &mut spec_value, &repo_root, mode)?;
 
     if update_spec {
         let file = File::create(spec_path)

@@ -351,7 +351,7 @@ impl RouterWorker {
         }
     }
 
-    fn handle_ecg(&mut self, ts: TimeSeries) {
+    fn handle_process_ecg(&mut self, ts: TimeSeries) {
         let _ = self.update_tx.send(StreamUpdate::Ecg(ts.clone()));
         let cfg = EcgPipelineConfig::default();
         let result = run_beat_hrv_pipeline(&ts, &cfg);

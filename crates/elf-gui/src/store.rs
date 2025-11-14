@@ -428,8 +428,9 @@ impl Store {
         if !self.dirty.psd {
             return;
         }
+        let interp_fs = self.psd_interp_fs;
         if let Some(rr) = self.ensure_rr_series() {
-            self.snapshot.hrv_psd = Some(hrv_psd(rr, self.psd_interp_fs));
+            self.snapshot.hrv_psd = Some(hrv_psd(rr, interp_fs));
         } else {
             self.snapshot.hrv_psd = None;
         }
