@@ -16,72 +16,10 @@ const MAX_WAVEFORM_POINTS: usize = 2048;
 const MAX_EEG_POINTS: usize = 2048;
 const MAX_EYE_POINTS: usize = 1024;
 
-#[derive(Default)]
-struct DirtyFlags {
-    waveform: bool,
-    rr: bool,
-    rr_figure: bool,
-    hrv: bool,
-    psd: bool,
-    psd_figure: bool,
-    nonlinear: bool,
-    sqi: bool,
-    rr_histogram: bool,
-    eeg: bool,
-    eye: bool,
-}
-
-impl DirtyFlags {
-    fn mark_ecg(&mut self) {
-        self.waveform = true;
-        self.rr = true;
-        self.rr_figure = true;
-        self.hrv = true;
-        self.psd = true;
-        self.psd_figure = true;
-        self.nonlinear = true;
-        self.sqi = true;
-        self.rr_histogram = true;
-    }
-
-    fn mark_events(&mut self) {
-        self.rr = true;
-        self.rr_figure = true;
-        self.hrv = true;
-        self.psd = true;
-        self.psd_figure = true;
-        self.nonlinear = true;
-        self.sqi = true;
-        self.rr_histogram = true;
-    }
-}
-
-#[derive(Default)]
-struct Snapshot {
-    ecg: Option<TimeSeries>,
-    events: Option<Events>,
-    rr: Option<RRSeries>,
-    hrv_time: Option<HRVTime>,
-    hrv_psd: Option<HRVPsd>,
-    hrv_nonlinear: Option<HRVNonlinear>,
-    sqi: Option<SQIResult>,
-    ecg_figure: Option<Figure>,
-    rr_figure: Option<Figure>,
-    psd_figure: Option<Figure>,
-    rr_histogram: Option<Figure>,
-    eeg: Option<TimeSeries>,
-    eeg_events: Vec<f64>,
-    eeg_figure: Option<Figure>,
-    eye_samples: Vec<eye_io::PupilSample>,
-    eye_filtered: Vec<eye_io::PupilSample>,
-    eye_figure: Option<Figure>,
-}
-
 pub struct Store {
-    snapshot: Snapshot,
-    dirty: DirtyFlags,
-    eye_threshold: f32,
-    psd_interp_fs: f64,
+    stream: StreamStore,
+    eeg: EegStore,
+    eye: EyeStore,
     run_bundle_state: Option<RunBundleState>,
 }
 
@@ -129,22 +67,9 @@ impl RunBundleState {
 impl Default for Store {
     fn default() -> Self {
         Self {
-            snapshot: Snapshot::default(),
-            dirty: DirtyFlags {
-                waveform: true,
-                rr: true,
-                rr_figure: true,
-                hrv: true,
-                psd: true,
-                psd_figure: true,
-                nonlinear: true,
-                sqi: true,
-                rr_histogram: true,
-                eeg: true,
-                eye: true,
-            },
-            eye_threshold: 0.5,
-            psd_interp_fs: 4.0,
+            stream: StreamStore::default(),
+            eeg: EegStore::default(),
+            eye: EyeStore::default(),
             run_bundle_state: None,
         }
     }
@@ -155,19 +80,260 @@ impl Store {
         Self::default()
     }
 
+    pub fn prepare(&mut self, tab: GuiTab) {
+        match tab {
+            GuiTab::Hrv => self.stream.prepare_hrv(),
+            GuiTab::Eeg => self.eeg.prepare(),
+            GuiTab::Eye => self.eye.prepare(),
+            _ => {}
+        }
+    }
+
     pub fn set_ecg(&mut self, ts: TimeSeries) {
+        self.stream.set_ecg(ts);
+    }
+
+    pub fn set_events(&mut self, events: Events) {
+        self.stream.set_events(events);
+    }
+
+    pub fn apply_stream_metrics(
+        &mut self,
+        rr: RRSeries,
+        hrv_time: HRVTime,
+        hrv_psd: HRVPsd,
+        hrv_nonlinear: HRVNonlinear,
+    ) {
+        self.stream
+            .apply_stream_metrics(rr, hrv_time, hrv_psd, hrv_nonlinear);
+    }
+
+    pub fn set_eeg(&mut self, ts: TimeSeries) {
+        self.eeg.set_eeg(ts);
+    }
+
+    pub fn set_eeg_events(&mut self, events: Vec<f64>) {
+        self.eeg.set_eeg_events(events);
+    }
+
+    pub fn set_eye_samples(&mut self, samples: Vec<eye_io::PupilSample>) {
+        self.eye.set_samples(samples);
+    }
+
+    pub fn set_eye_threshold(&mut self, threshold: f32) {
+        self.eye.set_threshold(threshold);
+    }
+
+    pub fn ecg(&self) -> Option<&TimeSeries> {
+        self.stream.ecg()
+    }
+
+    pub fn ecg_len(&self) -> usize {
+        self.stream.ecg_len()
+    }
+
+    pub fn events_len(&self) -> usize {
+        self.stream.events_len()
+    }
+
+    pub fn event_seconds(&self) -> Vec<f64> {
+        self.stream.event_seconds()
+    }
+
+    pub fn rr_series(&self) -> Option<&RRSeries> {
+        self.stream.rr_series()
+    }
+
+    pub fn hrv_time(&self) -> Option<&HRVTime> {
+        self.stream.hrv_time()
+    }
+
+    pub fn hrv_psd(&self) -> Option<&HRVPsd> {
+        self.stream.hrv_psd()
+    }
+
+    pub fn hrv_nonlinear(&self) -> Option<&HRVNonlinear> {
+        self.stream.hrv_nonlinear()
+    }
+
+    pub fn ecg_figure(&self) -> Option<&Figure> {
+        self.stream.ecg_figure()
+    }
+
+    #[allow(dead_code)]
+    pub fn rr_figure(&self) -> Option<&Figure> {
+        self.stream.rr_figure()
+    }
+
+    pub fn rr_histogram(&self) -> Option<&Figure> {
+        self.stream.rr_histogram()
+    }
+
+    pub fn psd_figure(&self) -> Option<&Figure> {
+        self.stream.psd_figure()
+    }
+
+    #[allow(dead_code)]
+    pub fn psd_interp_fs(&self) -> f64 {
+        self.stream.psd_interp_fs()
+    }
+
+    pub fn set_psd_interp_fs(&mut self, interp_fs: f64) {
+        self.stream.set_psd_interp_fs(interp_fs);
+    }
+
+    pub fn events(&self) -> Option<&Events> {
+        self.stream.events()
+    }
+
+    pub fn sqi(&self) -> Option<&SQIResult> {
+        self.stream.sqi()
+    }
+
+    pub fn hrv_snapshot(&self) -> HrvSnapshot {
+        HrvSnapshot {
+            events: self.stream.events().cloned(),
+            rr: self.stream.rr_series().cloned(),
+            fs: self.stream.ecg().map(|ts| ts.fs),
+            hrv_time: self.stream.hrv_time().cloned(),
+            hrv_psd: self.stream.hrv_psd().cloned(),
+            hrv_nonlinear: self.stream.hrv_nonlinear().cloned(),
+            psd_interp_fs: self.stream.psd_interp_fs(),
+            run_bundle_state: self.run_bundle_state.clone(),
+        }
+    }
+
+    pub fn set_run_bundle_state(&mut self, state: Option<RunBundleState>) {
+        self.run_bundle_state = state;
+    }
+
+    pub fn eye_figure(&self) -> Option<&Figure> {
+        self.eye.figure()
+    }
+
+    pub fn eeg_figure(&self) -> Option<&Figure> {
+        self.eeg.figure()
+    }
+
+    pub fn eeg_events(&self) -> &[f64] {
+        self.eeg.events()
+    }
+
+    #[allow(dead_code)]
+    pub fn eeg_fs(&self) -> Option<f64> {
+        self.eeg.fs()
+    }
+
+    pub fn eeg_sample_count(&self) -> usize {
+        self.eeg.sample_count()
+    }
+
+    pub fn eye_filtered(&self) -> &[eye_io::PupilSample] {
+        self.eye.filtered()
+    }
+
+    pub fn eye_total(&self) -> usize {
+        self.eye.total_samples()
+    }
+}
+
+struct StreamStore {
+    snapshot: StreamSnapshot,
+    dirty: StreamDirtyFlags,
+    psd_interp_fs: f64,
+}
+
+#[derive(Default)]
+struct StreamSnapshot {
+    ecg: Option<TimeSeries>,
+    events: Option<Events>,
+    rr: Option<RRSeries>,
+    hrv_time: Option<HRVTime>,
+    hrv_psd: Option<HRVPsd>,
+    hrv_nonlinear: Option<HRVNonlinear>,
+    sqi: Option<SQIResult>,
+    ecg_figure: Option<Figure>,
+    rr_figure: Option<Figure>,
+    psd_figure: Option<Figure>,
+    rr_histogram: Option<Figure>,
+}
+
+#[derive(Default)]
+struct StreamDirtyFlags {
+    waveform: bool,
+    rr: bool,
+    rr_figure: bool,
+    hrv: bool,
+    psd: bool,
+    psd_figure: bool,
+    nonlinear: bool,
+    sqi: bool,
+    rr_histogram: bool,
+}
+
+impl StreamDirtyFlags {
+    fn mark_ecg(&mut self) {
+        self.waveform = true;
+        self.rr = true;
+        self.rr_figure = true;
+        self.hrv = true;
+        self.psd = true;
+        self.psd_figure = true;
+        self.nonlinear = true;
+        self.sqi = true;
+        self.rr_histogram = true;
+    }
+
+    fn mark_events(&mut self) {
+        self.rr = true;
+        self.rr_figure = true;
+        self.hrv = true;
+        self.psd = true;
+        self.psd_figure = true;
+        self.nonlinear = true;
+        self.sqi = true;
+        self.rr_histogram = true;
+    }
+
+    fn mark_all(&mut self) {
+        self.waveform = true;
+        self.rr = true;
+        self.rr_figure = true;
+        self.hrv = true;
+        self.psd = true;
+        self.psd_figure = true;
+        self.nonlinear = true;
+        self.sqi = true;
+        self.rr_histogram = true;
+    }
+}
+
+impl StreamStore {
+    fn prepare_hrv(&mut self) {
+        self.ensure_waveform_figure();
+        self.ensure_rr_series();
+        self.ensure_rr_figure();
+        self.ensure_hrv_time();
+        self.ensure_psd();
+        self.ensure_psd_figure();
+        self.ensure_nonlinear();
+        self.ensure_sqi();
+        self.ensure_rr_histogram();
+    }
+
+    fn set_ecg(&mut self, ts: TimeSeries) {
         self.snapshot.ecg = Some(ts);
         self.dirty.mark_ecg();
         self.snapshot.rr = None;
     }
 
-    pub fn set_events(&mut self, events: Events) {
+    fn set_events(&mut self, events: Events) {
         self.snapshot.events = Some(events);
         self.dirty.mark_events();
         self.snapshot.rr = None;
     }
 
-    pub fn apply_stream_metrics(
+    fn apply_stream_metrics(
         &mut self,
         rr: RRSeries,
         hrv_time: HRVTime,
@@ -187,65 +353,15 @@ impl Store {
         self.dirty.sqi = true;
     }
 
-    pub fn set_eeg(&mut self, ts: TimeSeries) {
-        self.snapshot.eeg = Some(ts);
-        self.dirty.eeg = true;
-    }
-
-    pub fn set_eeg_events(&mut self, events: Vec<f64>) {
-        self.snapshot.eeg_events = events;
-    }
-
-    pub fn set_eye_samples(&mut self, samples: Vec<eye_io::PupilSample>) {
-        self.snapshot.eye_samples = samples;
-        self.update_eye_filter();
-    }
-
-    pub fn set_eye_threshold(&mut self, threshold: f32) {
-        self.eye_threshold = threshold;
-        self.update_eye_filter();
-    }
-
-    fn update_eye_filter(&mut self) {
-        let filtered: Vec<_> = self
-            .snapshot
-            .eye_samples
-            .iter()
-            .filter(|sample| sample.confidence.unwrap_or(1.0) >= self.eye_threshold)
-            .cloned()
-            .collect();
-        self.snapshot.eye_filtered = filtered;
-        self.dirty.eye = true;
-    }
-
-    pub fn prepare(&mut self, tab: GuiTab) {
-        match tab {
-            GuiTab::Hrv => {
-                self.ensure_waveform_figure();
-                self.ensure_rr_series();
-                self.ensure_rr_figure();
-                self.ensure_hrv_time();
-                self.ensure_psd();
-                self.ensure_psd_figure();
-                self.ensure_nonlinear();
-                self.ensure_sqi();
-                self.ensure_rr_histogram();
-            }
-            GuiTab::Eeg => self.ensure_eeg_figure(),
-            GuiTab::Eye => self.ensure_eye_figure(),
-            _ => {}
-        }
-    }
-
-    pub fn ecg(&self) -> Option<&TimeSeries> {
+    fn ecg(&self) -> Option<&TimeSeries> {
         self.snapshot.ecg.as_ref()
     }
 
-    pub fn ecg_len(&self) -> usize {
+    fn ecg_len(&self) -> usize {
         self.snapshot.ecg.as_ref().map(|ts| ts.len()).unwrap_or(0)
     }
 
-    pub fn events_len(&self) -> usize {
+    fn events_len(&self) -> usize {
         self.snapshot
             .events
             .as_ref()
@@ -253,7 +369,7 @@ impl Store {
             .unwrap_or(0)
     }
 
-    pub fn event_seconds(&self) -> Vec<f64> {
+    fn event_seconds(&self) -> Vec<f64> {
         if let (Some(events), Some(ts)) =
             (self.snapshot.events.as_ref(), self.snapshot.ecg.as_ref())
         {
@@ -264,44 +380,43 @@ impl Store {
         }
     }
 
-    pub fn rr_series(&self) -> Option<&RRSeries> {
+    fn rr_series(&self) -> Option<&RRSeries> {
         self.snapshot.rr.as_ref()
     }
 
-    pub fn hrv_time(&self) -> Option<&HRVTime> {
+    fn hrv_time(&self) -> Option<&HRVTime> {
         self.snapshot.hrv_time.as_ref()
     }
 
-    pub fn hrv_psd(&self) -> Option<&HRVPsd> {
+    fn hrv_psd(&self) -> Option<&HRVPsd> {
         self.snapshot.hrv_psd.as_ref()
     }
 
-    pub fn hrv_nonlinear(&self) -> Option<&HRVNonlinear> {
+    fn hrv_nonlinear(&self) -> Option<&HRVNonlinear> {
         self.snapshot.hrv_nonlinear.as_ref()
     }
 
-    pub fn ecg_figure(&self) -> Option<&Figure> {
+    fn ecg_figure(&self) -> Option<&Figure> {
         self.snapshot.ecg_figure.as_ref()
     }
 
-    #[allow(dead_code)]
-    pub fn rr_figure(&self) -> Option<&Figure> {
+    fn rr_figure(&self) -> Option<&Figure> {
         self.snapshot.rr_figure.as_ref()
     }
 
-    pub fn rr_histogram(&self) -> Option<&Figure> {
+    fn rr_histogram(&self) -> Option<&Figure> {
         self.snapshot.rr_histogram.as_ref()
     }
 
-    pub fn psd_figure(&self) -> Option<&Figure> {
+    fn psd_figure(&self) -> Option<&Figure> {
         self.snapshot.psd_figure.as_ref()
     }
 
-    pub fn psd_interp_fs(&self) -> f64 {
+    fn psd_interp_fs(&self) -> f64 {
         self.psd_interp_fs
     }
 
-    pub fn set_psd_interp_fs(&mut self, interp_fs: f64) {
+    fn set_psd_interp_fs(&mut self, interp_fs: f64) {
         if (self.psd_interp_fs - interp_fs).abs() < f64::EPSILON {
             return;
         }
@@ -310,57 +425,11 @@ impl Store {
         self.dirty.psd_figure = true;
     }
 
-    pub fn events(&self) -> Option<&Events> {
+    fn events(&self) -> Option<&Events> {
         self.snapshot.events.as_ref()
     }
 
-    pub fn hrv_snapshot(&self) -> HrvSnapshot {
-        HrvSnapshot {
-            events: self.snapshot.events.clone(),
-            rr: self.snapshot.rr.clone(),
-            fs: self.snapshot.ecg.as_ref().map(|ts| ts.fs),
-            hrv_time: self.snapshot.hrv_time.clone(),
-            hrv_psd: self.snapshot.hrv_psd.clone(),
-            hrv_nonlinear: self.snapshot.hrv_nonlinear.clone(),
-            psd_interp_fs: self.psd_interp_fs,
-            run_bundle_state: self.run_bundle_state.clone(),
-        }
-    }
-
-    pub fn set_run_bundle_state(&mut self, state: Option<RunBundleState>) {
-        self.run_bundle_state = state;
-    }
-
-    pub fn eye_figure(&self) -> Option<&Figure> {
-        self.snapshot.eye_figure.as_ref()
-    }
-
-    pub fn eeg_figure(&self) -> Option<&Figure> {
-        self.snapshot.eeg_figure.as_ref()
-    }
-
-    pub fn eeg_events(&self) -> &[f64] {
-        &self.snapshot.eeg_events
-    }
-
-    #[allow(dead_code)]
-    pub fn eeg_fs(&self) -> Option<f64> {
-        self.snapshot.eeg.as_ref().map(|ts| ts.fs)
-    }
-
-    pub fn eeg_sample_count(&self) -> usize {
-        self.snapshot.eeg.as_ref().map(|ts| ts.len()).unwrap_or(0)
-    }
-
-    pub fn eye_filtered(&self) -> &[eye_io::PupilSample] {
-        &self.snapshot.eye_filtered
-    }
-
-    pub fn eye_total(&self) -> usize {
-        self.snapshot.eye_samples.len()
-    }
-
-    pub fn sqi(&self) -> Option<&SQIResult> {
+    fn sqi(&self) -> Option<&SQIResult> {
         self.snapshot.sqi.as_ref()
     }
 
@@ -472,27 +541,102 @@ impl Store {
         }
         self.dirty.nonlinear = false;
     }
+}
 
-    fn ensure_eeg_figure(&mut self) {
-        if !self.dirty.eeg {
+impl Default for StreamStore {
+    fn default() -> Self {
+        let mut dirty = StreamDirtyFlags::default();
+        dirty.mark_all();
+        Self {
+            snapshot: StreamSnapshot::default(),
+            dirty,
+            psd_interp_fs: 4.0,
+        }
+    }
+}
+
+#[derive(Default)]
+struct EegStore {
+    ts: Option<TimeSeries>,
+    events: Vec<f64>,
+    figure: Option<Figure>,
+    dirty: bool,
+}
+
+impl EegStore {
+    fn set_eeg(&mut self, ts: TimeSeries) {
+        self.ts = Some(ts);
+        self.dirty = true;
+    }
+
+    fn set_eeg_events(&mut self, events: Vec<f64>) {
+        self.events = events;
+    }
+
+    fn prepare(&mut self) {
+        if !self.dirty {
             return;
         }
         let figure = self
-            .snapshot
-            .eeg
+            .ts
             .as_ref()
             .map(|ts| figure_from_timeseries("EEG trace", ts, MAX_EEG_POINTS, 0x33CCFF));
-        self.snapshot.eeg_figure = figure;
-        self.dirty.eeg = false;
+        self.figure = figure;
+        self.dirty = false;
     }
 
-    fn ensure_eye_figure(&mut self) {
-        if !self.dirty.eye {
+    fn figure(&self) -> Option<&Figure> {
+        self.figure.as_ref()
+    }
+
+    fn events(&self) -> &[f64] {
+        &self.events
+    }
+
+    fn fs(&self) -> Option<f64> {
+        self.ts.as_ref().map(|ts| ts.fs)
+    }
+
+    fn sample_count(&self) -> usize {
+        self.ts.as_ref().map(|ts| ts.len()).unwrap_or(0)
+    }
+}
+
+struct EyeStore {
+    samples: Vec<eye_io::PupilSample>,
+    filtered: Vec<eye_io::PupilSample>,
+    figure: Option<Figure>,
+    dirty: bool,
+    threshold: f32,
+}
+
+impl EyeStore {
+    fn set_samples(&mut self, samples: Vec<eye_io::PupilSample>) {
+        self.samples = samples;
+        self.update_filter();
+    }
+
+    fn set_threshold(&mut self, threshold: f32) {
+        self.threshold = threshold;
+        self.update_filter();
+    }
+
+    fn update_filter(&mut self) {
+        self.filtered = self
+            .samples
+            .iter()
+            .filter(|sample| sample.confidence.unwrap_or(1.0) >= self.threshold)
+            .cloned()
+            .collect();
+        self.dirty = true;
+    }
+
+    fn prepare(&mut self) {
+        if !self.dirty {
             return;
         }
         let points: Vec<[f64; 2]> = self
-            .snapshot
-            .eye_filtered
+            .filtered
             .iter()
             .filter_map(|sample| sample.pupil_mm.map(|p| [sample.timestamp, p as f64]))
             .collect();
@@ -507,8 +651,32 @@ impl Store {
                 0xFFCC33,
             ))
         };
-        self.snapshot.eye_figure = figure;
-        self.dirty.eye = false;
+        self.figure = figure;
+        self.dirty = false;
+    }
+
+    fn figure(&self) -> Option<&Figure> {
+        self.figure.as_ref()
+    }
+
+    fn filtered(&self) -> &[eye_io::PupilSample] {
+        &self.filtered
+    }
+
+    fn total_samples(&self) -> usize {
+        self.samples.len()
+    }
+}
+
+impl Default for EyeStore {
+    fn default() -> Self {
+        Self {
+            samples: Vec::new(),
+            filtered: Vec::new(),
+            figure: None,
+            dirty: true,
+            threshold: 0.5,
+        }
     }
 }
 
