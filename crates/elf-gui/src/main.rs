@@ -66,7 +66,11 @@ mod store;
 
 use hrv_helpers::{average_rr, heart_rate_from_rr};
 use router::{LslStatus, RecordingStatus, StreamCommand, StreamingStateRouter};
-use run_loader::{events_from_times, load_events, load_manifest, RunManifest};
+use run_loader::{
+    events_from_records, load_events_with_filter, load_manifest, RunEventFilter, RunEventRecord,
+    RunManifest,
+};
+use std::collections::HashMap;
 use store::Store;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -264,9 +268,14 @@ struct ElfApp {
     stream_simulator: Option<StreamingSimulator>,
     run_bundle_path: Option<String>,
     run_manifest: Option<RunManifest>,
+    run_bundle_event_filter: String,
+    run_bundle_event_records: Vec<RunEventRecord>,
+    run_bundle_event_summary: String,
     lsl_query: String,
     lsl_chunk_samples: usize,
     lsl_fs_hint: f64,
+    lsl_selected_stream: Option<usize>,
+    lsl_selected_channel: usize,
     key_list: Vec<KeyEntry>,
     keys_loaded: bool,
     key_status: String,
@@ -301,9 +310,14 @@ impl Default for ElfApp {
             stream_simulator: None,
             run_bundle_path: None,
             run_manifest: None,
+            run_bundle_event_filter: "stim".into(),
+            run_bundle_event_records: Vec::new(),
+            run_bundle_event_summary: String::new(),
             lsl_query: "ECG".into(),
             lsl_chunk_samples: 256,
             lsl_fs_hint: 250.0,
+            lsl_selected_stream: None,
+            lsl_selected_channel: 0,
             key_list: Vec::new(),
             keys_loaded: false,
             key_status: "Key manager idle".into(),
@@ -422,29 +436,64 @@ impl ElfApp {
         Ok(())
     }
 
+    fn refresh_lsl_streams(&mut self) {
+        match self.store.discover_lsl_streams(self.lsl_query.clone()) {
+            Ok(_) => {
+                self.status = format!("Refreshing LSL streams for '{}'", self.lsl_query);
+                self.lsl_selected_stream = None;
+            }
+            Err(err) => {
+                self.status = format!("Stream discovery failed: {err}");
+            }
+        }
+    }
+
     fn toggle_lsl_stream(&mut self) {
         if self.store.is_lsl_streaming() {
             self.store.stop_lsl_stream();
             self.status = "Stopped LSL inlet".into();
             return;
         }
-        let query = self.lsl_query.trim();
-        if query.is_empty() {
-            self.status = "Provide an LSL stream type before connecting".into();
-            return;
-        }
+        let (index, stream) = {
+            let streams = self.store.lsl_streams();
+            if streams.is_empty() {
+                self.status = "No LSL streams available; refresh to discover".into();
+                return;
+            }
+            let idx = match self.lsl_selected_stream {
+                Some(idx) if idx < streams.len() => idx,
+                _ => 0,
+            };
+            let record = streams
+                .get(idx)
+                .cloned()
+                .unwrap_or_else(|| streams[0].clone());
+            (idx, record)
+        };
+        self.lsl_selected_stream = Some(index);
         let chunk = self.lsl_chunk_samples.max(1);
         let fs_hint = if self.lsl_fs_hint.is_finite() && self.lsl_fs_hint > 0.0 {
             Some(self.lsl_fs_hint)
         } else {
             None
         };
-        match self
-            .store
-            .start_lsl_stream(query.to_string(), chunk, fs_hint)
-        {
+        let available_channels = stream.channels.max(1) as usize;
+        if self.lsl_selected_channel >= available_channels {
+            self.lsl_selected_channel = available_channels.saturating_sub(1);
+        }
+        let channel = self.lsl_selected_channel;
+        match self.store.start_lsl_stream(
+            stream.query.clone(),
+            stream.source_id.clone(),
+            channel,
+            chunk,
+            fs_hint,
+        ) {
             Ok(_) => {
-                self.status = format!("Resolving LSL stream ({query})");
+                self.status = format!(
+                    "Connecting to {} ({}) channel {}",
+                    stream.name, stream.source_id, channel
+                );
             }
             Err(err) => {
                 self.status = format!("LSL connect failed: {err}");
@@ -527,11 +576,17 @@ impl ElfApp {
     fn try_load_run_bundle(&mut self, path: &Path) -> Result<(), String> {
         let events_path = path.join("events.tsv");
         let manifest_path = path.join("run.json");
-        let times =
-            load_events(&events_path).map_err(|e| format!("Run events load failed: {}", e))?;
+        let filter = self.build_run_event_filter();
+        let records = load_events_with_filter(&events_path, &filter)
+            .map_err(|e| format!("Run events load failed: {}", e))?;
+        if records.is_empty() {
+            return Err("No run bundle events matched the configured filter".into());
+        }
         let fs = self.store.ecg().map(|ts| ts.fs).unwrap_or(self.fs).max(1.0);
-        let events = events_from_times(&times, fs);
+        let events = events_from_records(&records, fs);
         self.store.submit_events(events, fs);
+        self.run_bundle_event_records = records;
+        self.update_run_event_summary();
         let manifest = load_manifest(&manifest_path)
             .map_err(|e| format!("Run manifest load failed: {}", e))?;
         self.run_bundle_path = Some(path.display().to_string());
@@ -539,9 +594,54 @@ impl ElfApp {
         self.status = format!(
             "Loaded run bundle from {} ({} stimuli)",
             path.display(),
-            times.len()
+            self.run_bundle_event_records.len()
         );
         Ok(())
+    }
+
+    fn build_run_event_filter(&self) -> RunEventFilter {
+        let types: Vec<String> = self
+            .run_bundle_event_filter
+            .split(',')
+            .map(|segment| segment.trim())
+            .filter(|segment| !segment.is_empty())
+            .map(|segment| segment.to_string())
+            .collect();
+        if types.is_empty() {
+            RunEventFilter::allow_all()
+        } else {
+            RunEventFilter::with_allowed_types(types)
+        }
+    }
+
+    fn update_run_event_summary(&mut self) {
+        if self.run_bundle_event_records.is_empty() {
+            self.run_bundle_event_summary.clear();
+            return;
+        }
+        let mut counts = HashMap::new();
+        let mut label_examples = HashMap::new();
+        for record in &self.run_bundle_event_records {
+            *counts.entry(record.event_type.clone()).or_insert(0) += 1;
+            if let Some(label) = record.label.as_deref() {
+                label_examples
+                    .entry(record.event_type.clone())
+                    .or_insert_with(|| label.to_string());
+            }
+        }
+        let summary = counts
+            .into_iter()
+            .map(|(event_type, count)| {
+                if let Some(example) = label_examples.get(&event_type) {
+                    format!("{}:{} ({})", event_type, count, example)
+                } else {
+                    format!("{}:{}", event_type, count)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.run_bundle_event_summary =
+            format!("{} events ({summary})", self.run_bundle_event_records.len());
     }
 
     fn apply_eye_filter(&mut self) {
@@ -690,6 +790,9 @@ impl ElfApp {
             ui.horizontal(|ui| {
                 ui.label("Type");
                 ui.text_edit_singleline(&mut self.lsl_query);
+                if ui.button("Refresh streams").clicked() {
+                    self.refresh_lsl_streams();
+                }
             });
             ui.add(egui::Slider::new(&mut self.lsl_chunk_samples, 32..=2048).text("Chunk samples"));
             ui.add(
@@ -698,6 +801,49 @@ impl ElfApp {
                     .speed(1.0)
                     .suffix(" Hz"),
             );
+            let streams = self.store.lsl_streams();
+            if streams.is_empty() {
+                ui.label("No LSL streams discovered (refresh to search for a type).");
+            } else {
+                let selected = self
+                    .lsl_selected_stream
+                    .and_then(|idx| streams.get(idx))
+                    .map(|stream| stream.name.clone())
+                    .unwrap_or_else(|| "Select stream".into());
+                egui::ComboBox::from_label("Stream")
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        for (idx, stream) in streams.iter().enumerate() {
+                            let label = format!(
+                                "{} ({}) @ {:.1} Hz · {} ch",
+                                stream.name, stream.source_id, stream.fs, stream.channels
+                            );
+                            if ui
+                                .selectable_label(self.lsl_selected_stream == Some(idx), label)
+                                .clicked()
+                            {
+                                self.lsl_selected_stream = Some(idx);
+                                self.lsl_selected_channel = 0;
+                            }
+                        }
+                    });
+                if let Some(idx) = self.lsl_selected_stream {
+                    if let Some(stream) = streams.get(idx) {
+                        let max_channel = stream.channels.max(1) as usize;
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.lsl_selected_channel,
+                                0..=max_channel.saturating_sub(1),
+                            )
+                            .text("Channel"),
+                        );
+                        ui.label(format!(
+                            "{} channels @ {:.1} Hz ({:?})",
+                            stream.channels, stream.fs, stream.format
+                        ));
+                    }
+                }
+            }
             let lsl_label = if self.store.is_lsl_streaming() {
                 "Stop LSL inlet"
             } else {
@@ -719,8 +865,11 @@ impl ElfApp {
                     channels,
                     fs,
                     query,
+                    channel,
                 } => {
-                    ui.label(format!("Connected to {name} ({source_id}) via '{query}'"));
+                    ui.label(format!(
+                        "Connected to {name} ({source_id}) via '{query}' channel {channel}"
+                    ));
                     ui.label(format!("{channels} channels @ {:.1} Hz", fs));
                 }
                 LslStatus::Error(msg) => {
@@ -781,6 +930,11 @@ impl ElfApp {
 
             ui.separator();
             ui.heading("Run bundle");
+            ui.horizontal(|ui| {
+                ui.label("Event types");
+                ui.text_edit_singleline(&mut self.run_bundle_event_filter);
+            });
+            ui.label("Comma-separated list of event_type values (empty = any type).");
             if ui.button("Load run bundle").clicked() {
                 if let Some(path) = FileDialog::new().pick_folder() {
                     if let Err(err) = self.try_load_run_bundle(&path) {
@@ -804,6 +958,9 @@ impl ElfApp {
                 if let Some(policy) = &manifest.randomization_policy {
                     ui.label(format!("Randomization: {}", policy));
                 }
+            }
+            if !self.run_bundle_event_summary.is_empty() {
+                ui.label(format!("Matched events: {}", self.run_bundle_event_summary));
             }
 
             ui.separator();

@@ -20,9 +20,20 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+#[derive(Clone)]
+pub struct LslStreamInfo {
+    pub query: String,
+    pub name: String,
+    pub source_id: String,
+    pub channels: i32,
+    pub fs: f64,
+    pub format: ChannelFormat,
+}
+
 pub enum StreamCommand {
     ProcessEcg(TimeSeries),
     IngestEvents(Events, f64),
+    DiscoverLslStreams { query: String },
     StartRecording { path: PathBuf, fs: f64 },
     StopRecording,
     Shutdown,
@@ -39,6 +50,7 @@ enum StreamUpdate {
     },
     Recording(RecordingStatus),
     Lsl(LslStatus),
+    LslStreams(Vec<LslStreamInfo>),
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +78,7 @@ pub enum LslStatus {
         name: String,
         source_id: String,
         channels: i32,
+        channel: usize,
         fs: f64,
     },
     Error(String),
@@ -101,6 +114,7 @@ pub struct StreamingStateRouter {
     recording_status: RecordingStatus,
     lsl_status: LslStatus,
     lsl_stream: Option<LslStreamHandle>,
+    lsl_streams: Vec<LslStreamInfo>,
 }
 
 impl StreamingStateRouter {
@@ -119,6 +133,7 @@ impl StreamingStateRouter {
             recording_status: RecordingStatus::default(),
             lsl_status: LslStatus::default(),
             lsl_stream: None,
+            lsl_streams: Vec::new(),
         }
     }
 
@@ -142,6 +157,16 @@ impl StreamingStateRouter {
         let _ = self
             .command_tx
             .send(StreamCommand::IngestEvents(events, fs));
+    }
+
+    pub fn lsl_streams(&self) -> &[LslStreamInfo] {
+        &self.lsl_streams
+    }
+
+    pub fn discover_lsl_streams(&self, query: String) -> Result<()> {
+        self.command_tx
+            .send(StreamCommand::DiscoverLslStreams { query })
+            .map_err(|e| anyhow!("Failed to request stream discovery: {e}"))
     }
 
     pub fn start_recording<P: Into<PathBuf>>(&self, path: P, fs: f64) -> Result<()> {
@@ -169,6 +194,8 @@ impl StreamingStateRouter {
     pub fn start_lsl_stream(
         &mut self,
         query: String,
+        source_id: String,
+        channel: usize,
         chunk_size: usize,
         fs_hint: Option<f64>,
     ) -> Result<()> {
@@ -182,6 +209,8 @@ impl StreamingStateRouter {
         let handle = std::thread::spawn(move || {
             let result = run_lsl_loop(
                 query,
+                source_id,
+                channel,
                 chunk_size,
                 fs_hint,
                 command_tx,
@@ -236,6 +265,9 @@ impl StreamingStateRouter {
                 StreamUpdate::Lsl(status) => {
                     self.lsl_status = status;
                 }
+                StreamUpdate::LslStreams(streams) => {
+                    self.lsl_streams = streams;
+                }
             }
         }
     }
@@ -264,6 +296,9 @@ impl RouterWorker {
                     let _ = self.update_tx.send(StreamUpdate::Events(events.clone()));
                     publish_metrics(&events, fs, &self.update_tx);
                 }
+                StreamCommand::DiscoverLslStreams { query } => {
+                    self.discover_lsl_streams(&query);
+                }
                 StreamCommand::StartRecording { path, fs } => {
                     self.start_recording(path, fs);
                 }
@@ -274,6 +309,39 @@ impl RouterWorker {
             }
         }
         self.stop_recording();
+    }
+
+    fn discover_lsl_streams(&self, query: &str) {
+        let _ = self.update_tx.send(StreamUpdate::Lsl(LslStatus::Resolving {
+            query: query.to_string(),
+        }));
+        match lsl::resolve_byprop("type", query, 32, lsl::FOREVER) {
+            Ok(streams) => {
+                let infos: Vec<LslStreamInfo> = streams
+                    .into_iter()
+                    .map(|info| LslStreamInfo {
+                        query: query.to_string(),
+                        name: info.stream_name(),
+                        source_id: info.source_id(),
+                        channels: info.channel_count(),
+                        fs: info.nominal_srate().max(0.0),
+                        format: info.channel_format(),
+                    })
+                    .collect();
+                let empty = infos.is_empty();
+                let _ = self.update_tx.send(StreamUpdate::LslStreams(infos));
+                if empty {
+                    let _ = self.update_tx.send(StreamUpdate::Lsl(LslStatus::Idle));
+                }
+            }
+            Err(err) => {
+                let _ = self
+                    .update_tx
+                    .send(StreamUpdate::Lsl(LslStatus::Error(format!(
+                        "Stream discovery failed: {err}"
+                    ))));
+            }
+        }
     }
 
     fn handle_ecg(&mut self, ts: TimeSeries) {
@@ -390,6 +458,8 @@ fn publish_metrics(events: &Events, fs: f64, update_tx: &Sender<StreamUpdate>) {
 
 fn run_lsl_loop(
     query: String,
+    source_id: String,
+    channel: usize,
     chunk_size: usize,
     fs_hint: Option<f64>,
     command_tx: Sender<StreamCommand>,
@@ -399,12 +469,21 @@ fn run_lsl_loop(
     let _ = update_tx.send(StreamUpdate::Lsl(LslStatus::Resolving {
         query: query.clone(),
     }));
-    let streams = lsl::resolve_byprop("type", &query, 1, lsl::FOREVER)
-        .map_err(|err| anyhow!("Failed to resolve LSL stream: {err:?}"))?;
+    let streams = match lsl::resolve_byprop("source_id", &source_id, 1, lsl::FOREVER) {
+        Ok(list) if !list.is_empty() => list,
+        _ => {
+            let fallback = lsl::resolve_byprop("type", &query, 1, lsl::FOREVER)
+                .map_err(|err| anyhow!("Failed to resolve LSL stream: {err:?}"))?;
+            if fallback.is_empty() {
+                return Err(anyhow!("No LSL stream found for source {source_id}"));
+            }
+            fallback
+        }
+    };
     let info = streams
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("No LSL stream found for type {query}"))?;
+        .ok_or_else(|| anyhow!("No LSL stream available for {query}"))?;
     let fs = if info.nominal_srate() > 0.0 {
         info.nominal_srate()
     } else {
@@ -419,6 +498,12 @@ fn run_lsl_loop(
     let name = info.stream_name();
     let source_id = info.source_id();
     let channels = info.channel_count();
+    if channel >= channels as usize {
+        return Err(anyhow!(
+            "Requested channel {channel} > {} available channels",
+            channels
+        ));
+    }
     let format = info.channel_format();
     let inlet = lsl::StreamInlet::new(&info, chunk_size as i32, 0, true)
         .map_err(|err| anyhow!("Failed to open LSL inlet: {err:?}"))?;
@@ -435,6 +520,7 @@ fn run_lsl_loop(
         name,
         source_id,
         channels,
+        channel,
         fs,
     }));
 
@@ -449,7 +535,7 @@ fn run_lsl_loop(
                     .map_err(|err| anyhow!("LSL read failed: {err:?}"))?;
                 chunk
                     .into_iter()
-                    .filter_map(|sample| sample.get(0).copied())
+                    .filter_map(|sample| sample.get(channel).copied())
                     .map(|v| v as f64)
                     .collect::<Vec<f64>>()
             }
@@ -459,7 +545,7 @@ fn run_lsl_loop(
                     .map_err(|err| anyhow!("LSL read failed: {err:?}"))?;
                 chunk
                     .into_iter()
-                    .filter_map(|sample| sample.get(0).copied())
+                    .filter_map(|sample| sample.get(channel).copied())
                     .collect::<Vec<f64>>()
             }
             other => {
