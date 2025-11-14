@@ -20,6 +20,124 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+type CommandHandler = fn(&mut RouterWorker, StreamCommand);
+
+struct CommandEntry {
+    matcher: fn(&StreamCommand) -> bool,
+    handler: CommandHandler,
+}
+
+const COMMAND_ENTRIES: [CommandEntry; 7] = [
+    CommandEntry {
+        matcher: matches_process_ecg,
+        handler: handle_process_ecg_cmd,
+    },
+    CommandEntry {
+        matcher: matches_ingest_events,
+        handler: handle_ingest_events_cmd,
+    },
+    CommandEntry {
+        matcher: matches_set_psd_interp,
+        handler: handle_set_psd_interp_cmd,
+    },
+    CommandEntry {
+        matcher: matches_discover_lsl,
+        handler: handle_discover_lsl_cmd,
+    },
+    CommandEntry {
+        matcher: matches_start_recording,
+        handler: handle_start_recording_cmd,
+    },
+    CommandEntry {
+        matcher: matches_stop_recording,
+        handler: handle_stop_recording_cmd,
+    },
+    CommandEntry {
+        matcher: matches_shutdown,
+        handler: handle_shutdown_cmd,
+    },
+];
+
+fn matches_process_ecg(command: &StreamCommand) -> bool {
+    matches!(command, StreamCommand::ProcessEcg(_))
+}
+
+fn matches_ingest_events(command: &StreamCommand) -> bool {
+    matches!(command, StreamCommand::IngestEvents(_, _))
+}
+
+fn matches_set_psd_interp(command: &StreamCommand) -> bool {
+    matches!(command, StreamCommand::SetPsdInterpFs(_))
+}
+
+fn matches_discover_lsl(command: &StreamCommand) -> bool {
+    matches!(command, StreamCommand::DiscoverLslStreams { .. })
+}
+
+fn matches_start_recording(command: &StreamCommand) -> bool {
+    matches!(command, StreamCommand::StartRecording { .. })
+}
+
+fn matches_stop_recording(command: &StreamCommand) -> bool {
+    matches!(command, StreamCommand::StopRecording)
+}
+
+fn matches_shutdown(command: &StreamCommand) -> bool {
+    matches!(command, StreamCommand::Shutdown)
+}
+
+fn handle_process_ecg_cmd(worker: &mut RouterWorker, command: StreamCommand) {
+    if let StreamCommand::ProcessEcg(ts) = command {
+        worker.handle_process_ecg(ts);
+    }
+}
+
+fn handle_ingest_events_cmd(worker: &mut RouterWorker, command: StreamCommand) {
+    if let StreamCommand::IngestEvents(events, fs) = command {
+        worker.handle_ingest_events(events, fs);
+    }
+}
+
+fn handle_set_psd_interp_cmd(worker: &mut RouterWorker, command: StreamCommand) {
+    if let StreamCommand::SetPsdInterpFs(interp_fs) = command {
+        worker.handle_set_psd_interp_fs(interp_fs);
+    }
+}
+
+fn handle_discover_lsl_cmd(worker: &mut RouterWorker, command: StreamCommand) {
+    if let StreamCommand::DiscoverLslStreams { query } = command {
+        worker.handle_discover_lsl_streams(query);
+    }
+}
+
+fn handle_start_recording_cmd(worker: &mut RouterWorker, command: StreamCommand) {
+    if let StreamCommand::StartRecording { path, fs } = command {
+        worker.handle_start_recording(path, fs);
+    }
+}
+
+fn handle_stop_recording_cmd(worker: &mut RouterWorker, command: StreamCommand) {
+    if matches!(command, StreamCommand::StopRecording) {
+        worker.handle_stop_recording();
+    }
+}
+
+fn handle_shutdown_cmd(worker: &mut RouterWorker, command: StreamCommand) {
+    if matches!(command, StreamCommand::Shutdown) {
+        worker.handle_shutdown();
+    }
+}
+
+fn dispatch_command(worker: &mut RouterWorker, command: StreamCommand) -> bool {
+    for entry in &COMMAND_ENTRIES {
+        if (entry.matcher)(&command) {
+            (entry.handler)(worker, command);
+            return true;
+        }
+    }
+    false
+}
+
 #[derive(Clone)]
 pub struct LslStreamInfo {
     pub query: String,
@@ -297,25 +415,27 @@ impl RouterWorker {
 
     fn run(mut self) {
         while let Ok(command) = self.command_rx.recv() {
-            match command {
-                StreamCommand::ProcessEcg(ts) => self.handle_process_ecg(ts),
-                StreamCommand::IngestEvents(events, fs) => self.handle_ingest_events(events, fs),
-                StreamCommand::SetPsdInterpFs(interp_fs) => {
-                    self.handle_set_psd_interp_fs(interp_fs);
-                }
-                StreamCommand::DiscoverLslStreams { query } => {
-                    self.discover_lsl_streams(&query);
-                }
-                StreamCommand::StartRecording { path, fs } => {
-                    self.start_recording(path, fs);
-                }
-                StreamCommand::StopRecording => {
-                    self.stop_recording();
-                }
-                StreamCommand::Shutdown => break,
+            if dispatch_command(&mut self, command) {
+                continue;
             }
         }
         self.stop_recording();
+    }
+
+    fn handle_discover_lsl_streams(&mut self, query: String) {
+        self.discover_lsl_streams(&query);
+    }
+
+    fn handle_start_recording(&mut self, path: PathBuf, fs: f64) {
+        self.start_recording(path, fs);
+    }
+
+    fn handle_stop_recording(&mut self) {
+        self.stop_recording();
+    }
+
+    fn handle_shutdown(&mut self) {
+        // no additional cleanup required; run loop will break after dispatcher handles shutdown
     }
 
     fn discover_lsl_streams(&self, query: &str) {
