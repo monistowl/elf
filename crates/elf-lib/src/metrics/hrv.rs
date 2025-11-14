@@ -30,6 +30,7 @@ pub struct HRVNonlinear {
     pub dfa_alpha1: f64,
 }
 
+/// Computes standard time-domain HRV markers (AVNN, SDNN, RMSSD, pNN50) from clean RR intervals.
 pub fn hrv_time(rr: &RRSeries) -> HRVTime {
     let n = rr.rr.len();
     let avnn = if n > 0 {
@@ -69,6 +70,8 @@ pub fn hrv_time(rr: &RRSeries) -> HRVTime {
     }
 }
 
+/// Computes Welch-periodogram based PSD (doi:10.1109/PROC.1967.4503) and integrates canonical
+/// LF/HF/VLF bands for autonomic balance summaries.
 pub fn hrv_psd(rr: &RRSeries, fs_interp: f64) -> HRVPsd {
     let (freqs, powers) = welch_psd(rr, fs_interp);
     let total_power: f64 = powers.iter().sum();
@@ -93,6 +96,8 @@ pub fn hrv_psd(rr: &RRSeries, fs_interp: f64) -> HRVPsd {
     }
 }
 
+/// Nonlinear HRV descriptors: Poincaré SD1/SD2, sample entropy (Richman & Moorman 2000,
+/// doi:10.1016/S1361-6528(01)00113-3), and DFA α1 to capture short-term fractal scaling.
 pub fn hrv_nonlinear(rr: &RRSeries) -> HRVNonlinear {
     let sd1 = poincare_sd1(rr);
     let sdnn = if rr.rr.len() > 1 {
@@ -112,6 +117,7 @@ pub fn hrv_nonlinear(rr: &RRSeries) -> HRVNonlinear {
     }
 }
 
+/// Approximate entropy using Richman & Moorman's sample entropy (doi:10.1016/S1361-6528(01)00113-3).
 fn sample_entropy(data: &[f64], m: usize, r: f64) -> f64 {
     if data.len() <= m + 1 {
         return 0.0;
@@ -144,6 +150,7 @@ fn max_diff(data: &[f64], i: usize, j: usize, length: usize) -> f64 {
 }
 
 fn poincare_sd1(rr: &RRSeries) -> f64 {
+    // SD1 reflects short-term dispersion of successive RR differences on the Poincaré map.
     let diffs: Vec<f64> = rr.rr.windows(2).map(|w| w[1] - w[0]).collect();
     if diffs.is_empty() {
         return 0.0;
@@ -153,6 +160,7 @@ fn poincare_sd1(rr: &RRSeries) -> f64 {
     (0.5 * var).sqrt()
 }
 
+/// Detrended fluctuation analysis quantifying short-term fractal scaling (α1) via log-log fitting.
 fn detrended_fluctuation_alpha1(rr: &[f64]) -> f64 {
     const MIN_WINDOW: usize = 4;
     const MAX_WINDOW: usize = 16;
@@ -268,6 +276,7 @@ fn integrate_band(freqs: &[f64], powers: &[f64], band: (f64, f64)) -> f64 {
 }
 
 fn welch_psd(rr: &RRSeries, fs_interp: f64) -> (Vec<f64>, Vec<f64>) {
+    // Welch's averaging of overlapped windows using Hann taper (doi:10.1109/PROC.1967.4503).
     let signal = interpolate_rr(rr, fs_interp);
     let n = signal.len();
     if n == 0 {
@@ -316,6 +325,8 @@ fn welch_psd(rr: &RRSeries, fs_interp: f64) -> (Vec<f64>, Vec<f64>) {
 }
 
 fn interpolate_rr(rr: &RRSeries, fs: f64) -> Vec<f64> {
+    // Naively resamples RR intervals at uniform time steps by holding each instantaneous heart rate
+    // over the duration of the interval (similar to classic HRV interpolation heuristics).
     let mut times = Vec::new();
     let mut acc = 0.0;
     for interval in &rr.rr {

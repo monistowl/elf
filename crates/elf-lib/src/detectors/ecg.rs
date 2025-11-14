@@ -59,6 +59,11 @@ impl BeatHrvPipelineResult {
 }
 
 /// Run the improved Pan–Tompkins-inspired pipeline with a minimal configuration surface.
+///
+/// The pipeline follows the classic Pan & Tompkins 1985 steps (doi:10.1109/TBME.1985.325532):
+/// band-pass filter around the QRS band, derivative to accentuate slopes, squaring to emphasize
+/// large slopes, and moving-window integration to approximate the QRS envelope prior to
+/// adaptive thresholding.
 pub fn detect_r_peaks(ts: &TimeSeries, min_rr_s: f64) -> Events {
     let mut cfg = EcgPipelineConfig::default();
     cfg.min_rr_s = min_rr_s.max(0.15);
@@ -88,6 +93,9 @@ pub fn run_beat_hrv_pipeline(ts: &TimeSeries, cfg: &EcgPipelineConfig) -> BeatHr
     BeatHrvPipelineResult::from_events(ts, events)
 }
 
+/// Builds the Pan–Tompkins-style envelope used for adaptive peak selection.
+/// The envelope is a bandpassed + derivative-squared sequence smoothed with a moving window
+/// (classic Pan & Tompkins 1985 preprocessing before thresholding). doi:10.1109/TBME.1985.325532
 fn pan_tompkins_envelope(ts: &TimeSeries, cfg: &EcgPipelineConfig) -> (Vec<f64>, Vec<f64>) {
     let data = &ts.data;
     let fs = ts.fs.max(1.0);
@@ -184,6 +192,10 @@ fn moving_average(data: &[f64], win: usize) -> Vec<f64> {
     out
 }
 
+/// Uses a running signal/noise estimate to adaptively threshold the Pan–Tompkins envelope,
+/// mimicking the robust threshold adaptation described by Pan & Tompkins (doi:10.1109/TBME.1985.325532).
+/// Peaks that survive the refractory guard are refined by searching the underlying bandpassed
+/// signal within a short window.
 fn pick_peaks(
     bandpassed: &[f64],
     envelope: &[f64],
@@ -239,6 +251,7 @@ fn pick_peaks(
 }
 
 fn fallback_peak_picker(ts: &TimeSeries, cfg: &EcgPipelineConfig) -> Vec<usize> {
+    // Very simple thresholding/minimum-distance routine used only when the adaptive pass fails.
     let min_gap = (cfg.min_rr_s * ts.fs).max(1.0) as usize;
     let data = &ts.data;
     if data.len() < 3 {
