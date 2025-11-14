@@ -69,6 +69,9 @@ pub fn read_eye_csv(
     Ok(samples)
 }
 
+/// Thresholds pupil samples based on the reported confidence score to improve data quality.
+/// See Holmqvist et al. (2018, doi:10.3758/s13428-018-1071-1) for a survey of confidence-based
+/// filtering strategies in eye tracking data.
 pub fn confidence_filter(samples: &[PupilSample], min_confidence: f32) -> Vec<PupilSample> {
     samples
         .iter()

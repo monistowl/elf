@@ -31,6 +31,9 @@ impl SyncFileReader for DiskFileReader {
 }
 
 /// Load a single EDF channel (by index) into a `TimeSeries`.
+///
+/// EDF (European Data Format) is a widely adopted archival format for electrophysiology;
+/// this helper follows the EDF/EDF+ spec to read the header + channel samples directly.
 pub fn load_edf_channel(path: &Path, channel: usize) -> Result<TimeSeries> {
     let reader = SyncEDFReader::init_with_file_reader(DiskFileReader::new(path))?;
     if channel >= reader.edf_header.channels.len() {
@@ -90,6 +93,10 @@ impl BidsEvent {
 }
 
 /// Load BIDS events (`events.tsv`) and convert them to `Events` indices using the sampling rate.
+///
+/// The Brain Imaging Data Structure (BIDS) formalizes event tables for neuroimaging tasks
+/// so downstream pipelines can align stimuli with acquisitions (Gorgolewski et al. 2016,
+/// doi:10.1016/j.neuroimage.2016.05.062).
 pub fn load_bids_events_indices(path: &Path, fs: f64) -> Result<Events> {
     let events = load_bids_events(path)?;
     let indices = events
