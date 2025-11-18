@@ -133,6 +133,16 @@ The exported JSON now bundles the run manifest/filter metadata (if you loaded a 
 
 ---
 
+## TUI dashboard
+
+```bash
+cargo run -p elf-tui
+```
+
+`elf-tui` mirrors the GUI tabs in a terminal-only flow powered by `ratatui`. Use the left/right arrows (or `1`–`3`) to pick tabs, `Tab` to edit fields, and `Enter` to run the ECG → HRV pipeline or load a run bundle for manifest/event summaries.
+
+---
+
 ## Validation & testing
 
 - `cargo test` covers `elf-lib` metrics, CLI regression suites (`pipeline.rs`, `pupil.rs`, etc.), and the dataset validator.
