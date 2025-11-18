@@ -171,7 +171,7 @@ fn manifest_records_jitter() {
     assert_eq!(bundle.manifest.isi_jitter_ms, Some(100.0));
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventRow {
     pub onset: f64,
     pub duration: f64,
@@ -179,13 +179,17 @@ pub struct EventRow {
     pub block: usize,
     pub event_type: String,
     pub stim_id: String,
+    #[serde(default)]
     pub condition: String,
+    #[serde(default)]
     pub resp_key: Option<String>,
+    #[serde(default)]
     pub resp_rt: Option<f64>,
+    #[serde(default)]
     pub value: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RunManifest {
     pub sub: String,
     pub ses: String,
@@ -400,6 +404,29 @@ pub fn write_manifest(path: &Path, manifest: &RunManifest) -> Result<()> {
     let file = fs::File::create(path)?;
     serde_json::to_writer_pretty(file, manifest)?;
     Ok(())
+}
+
+pub fn read_manifest(path: &Path) -> Result<RunManifest> {
+    let file =
+        fs::File::open(path).with_context(|| format!("opening manifest {}", path.display()))?;
+    let manifest = serde_json::from_reader::<_, RunManifest>(file)
+        .with_context(|| format!("parsing manifest {}", path.display()))?;
+    Ok(manifest)
+}
+
+pub fn read_events_tsv(path: &Path) -> Result<Vec<EventRow>> {
+    let mut reader = ReaderBuilder::new()
+        .delimiter(b'\t')
+        .trim(Trim::All)
+        .has_headers(true)
+        .from_path(path)
+        .with_context(|| format!("opening events {}", path.display()))?;
+    let mut events = Vec::new();
+    for row in reader.deserialize::<EventRow>() {
+        let parsed = row.with_context(|| format!("parsing events in {}", path.display()))?;
+        events.push(parsed);
+    }
+    Ok(events)
 }
 
 #[cfg(test)]
